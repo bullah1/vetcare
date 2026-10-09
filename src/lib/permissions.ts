@@ -24,6 +24,7 @@ export const MODULES: ModuleDef[] = [
   { key: "pending_bills", label: "Pending Bills", url: "/pending-bills", group: "Shop" },
   { key: "due_bills", label: "Due Bills", url: "/due-bills", group: "Shop" },
   { key: "deliveries", label: "Deliveries", url: "/deliveries", group: "Shop" },
+  { key: "delivery_report", label: "Delivery Report", url: "/delivery-report", group: "Shop" },
 
   { key: "accounts", label: "Accounts", url: "/accounts", group: "Business" },
   { key: "reports", label: "Reports", url: "/reports", group: "Business" },
@@ -36,6 +37,9 @@ export const PERMISSION_KEYS = MODULES.map((m) => m.key);
 
 /** Modules only an admin may ever access, regardless of granted permissions. */
 export const ADMIN_ONLY_KEYS = ["staff"];
+
+/** A permission that is also granted by another one (older users keep access). */
+export const IMPLIED_BY: Record<string, string> = { delivery_report: "deliveries" };
 
 /** Map a pathname to the permission that guards it. */
 export function permissionForPath(pathname: string): string | null {
@@ -50,7 +54,7 @@ export const ROLE_PRESETS: Record<string, string[]> = {
   admin: PERMISSION_KEYS,
   doctor: ["dashboard", "clinic_dashboard", "clinical_intelligence", "appointments", "appointment_history", "pets", "clinical_visit", "medical", "prescriptions"],
   reception: ["dashboard", "clinic_dashboard", "appointments", "appointment_history", "pets", "receivables", "crm", "pending_bills", "due_bills"],
-  cashier: ["dashboard", "pos", "sales_history", "cash_drawer", "reconciliation", "receivables", "pending_bills", "due_bills", "deliveries"],
+  cashier: ["dashboard", "pos", "sales_history", "cash_drawer", "reconciliation", "receivables", "pending_bills", "due_bills", "deliveries", "delivery_report"],
   pharmacy: ["dashboard", "pos", "inventory", "prescriptions", "adjustments"],
   store_manager: ["dashboard", "inventory", "purchases", "adjustments", "reports"],
 };

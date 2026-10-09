@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
-import { ADMIN_ONLY_KEYS } from "@/lib/permissions";
+import { ADMIN_ONLY_KEYS, IMPLIED_BY } from "@/lib/permissions";
 import { syncClinicFromServer } from "@/lib/clinic-settings";
 
 export type AppRole = "admin" | "doctor" | "reception" | "cashier" | "pharmacy" | "store_manager";
@@ -73,7 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         can: (permission) => {
           if (isAdmin) return true;
           if (ADMIN_ONLY_KEYS.includes(permission)) return false;
-          return permissions.includes(permission);
+          return permissions.includes(permission) || (!!IMPLIED_BY[permission] && permissions.includes(IMPLIED_BY[permission]));
         },
         signOut: async () => {
           await supabase.auth.signOut();

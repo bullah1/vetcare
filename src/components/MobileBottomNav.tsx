@@ -21,6 +21,7 @@ import {
   LayoutGrid,
   ClipboardList,
   Bike,
+  PackageCheck,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -43,6 +44,7 @@ const ICONS: Record<string, typeof Users> = {
   receivables: HandCoins,
   pending_bills: ClipboardList,
   deliveries: Bike,
+  delivery_report: PackageCheck,
   accounts: Wallet,
   reports: BarChart3,
   crm: Users,
