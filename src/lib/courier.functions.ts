@@ -254,3 +254,26 @@ export const refreshAllCourierStatuses = createServerFn({ method: "POST" })
     }
     return { ok: true as const, checked: list.length, changed, failed };
   });
+
+/** Connection test: asks Steadfast for the account balance (changes nothing). */
+export const checkSteadfastConnection = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async () => {
+    const apiKey = process.env["STEADFAST_API_KEY"];
+    const secretKey = process.env["STEADFAST_SECRET_KEY"];
+    if (!apiKey || !secretKey) {
+      return { ok: false as const, reason: "not_configured" as const, message: "STEADFAST_API_KEY / STEADFAST_SECRET_KEY are not set on this server." };
+    }
+    try {
+      const res = await fetch("https://portal.packzy.com/api/v1/get_balance", {
+        headers: { "Api-Key": apiKey, "Secret-Key": secretKey, Accept: "application/json" },
+      });
+      const json: any = await res.json().catch(() => null);
+      if (res.ok && json && Number(json.status) === 200) {
+        return { ok: true as const, balance: Number(json.current_balance ?? 0) };
+      }
+      return { ok: false as const, reason: "rejected" as const, message: json?.message ?? `Steadfast answered HTTP ${res.status} — check the API key and secret key.` };
+    } catch (e: any) {
+      return { ok: false as const, reason: "network" as const, message: e?.message ?? "Could not reach Steadfast" };
+    }
+  });

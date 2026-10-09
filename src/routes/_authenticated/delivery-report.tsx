@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { AlertTriangle, Bike, Download, FileText, MessageCircle, PackageCheck, RefreshCw, RotateCcw, Search, Truck } from "lucide-react";
 import { ReturnFlow } from "@/components/ReturnFlow";
-import { refreshAllCourierStatuses } from "@/lib/courier.functions";
+import { checkSteadfastConnection, refreshAllCourierStatuses } from "@/lib/courier.functions";
 import { courierStage, type ParcelStage } from "@/lib/courier-status";
 import { deliveryMoney, loadShipments, type Shipment, type ShipmentKind } from "@/lib/shipments";
 import { DeliverySettlement } from "@/components/DeliverySettlement";
@@ -112,6 +112,20 @@ function DeliveryReportPage() {
   // Latest courier status from Steadfast (cancelled / delivered show up here).
   const qc = useQueryClient();
   const refreshFn = useServerFn(refreshAllCourierStatuses);
+  const checkFn = useServerFn(checkSteadfastConnection);
+  const [checking, setChecking] = useState(false);
+  const testSteadfast = async () => {
+    setChecking(true);
+    try {
+      const r: any = await checkFn();
+      if (r.ok) toast.success(`Steadfast connected ✓ — account balance ৳${Number(r.balance).toLocaleString("en-BD")}`);
+      else toast.error(`Steadfast not working: ${r.message}`, { duration: 10000 });
+    } catch (e: any) {
+      toast.error(`Steadfast not working: ${e?.message ?? "unknown error"}`, { duration: 10000 });
+    } finally {
+      setChecking(false);
+    }
+  };
   const [syncing, setSyncing] = useState(false);
   const syncCourier = async (silent = false) => {
     setSyncing(true);
@@ -244,6 +258,9 @@ function DeliveryReportPage() {
         icon={PackageCheck}
         actions={
           <div className="flex flex-wrap gap-2">
+            <Button variant="outline" disabled={checking} onClick={testSteadfast} title="Check that the Steadfast API key works (shows your Steadfast balance)">
+              <PackageCheck className="h-4 w-4" /> {checking ? "Checking…" : "Test Steadfast"}
+            </Button>
             <Button variant="outline" disabled={syncing} onClick={() => syncCourier(false)} title="Get the latest status of every courier parcel from Steadfast">
               <RefreshCw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} /> {syncing ? "Updating…" : "Update courier status"}
             </Button>
