@@ -8,20 +8,19 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { AlertTriangle, Bike, Download, FileText, MessageCircle, PackageCheck, RefreshCw, RotateCcw, Search, Truck } from "lucide-react";
 import { ReturnFlow } from "@/components/ReturnFlow";
 import { refreshAllCourierStatuses } from "@/lib/courier.functions";
-import { courierStage, localStage } from "@/lib/courier-status";
-import { supabase } from "@/integrations/supabase/client";
+import { courierStage, type ParcelStage } from "@/lib/courier-status";
+import { deliveryMoney, loadShipments, type Shipment, type ShipmentKind } from "@/lib/shipments";
+import { DeliverySettlement } from "@/components/DeliverySettlement";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { fetchAll, fetchAllIn } from "@/lib/fetch-all";
-import { dayRangeISO, monthStartDhaka, todayDhaka } from "@/lib/sales-ledger";
-import { dhakaDayKey, shiftDay } from "@/lib/sales-summary";
-import { courierName, printInvoice, shareInvoiceOnWhatsApp } from "@/lib/invoice-print";
+import { monthStartDhaka, todayDhaka } from "@/lib/sales-ledger";
+import { shiftDay } from "@/lib/sales-summary";
+import { printInvoice, shareInvoiceOnWhatsApp } from "@/lib/invoice-print";
 import { fetchSaleReceipt } from "@/lib/sale-receipt";
-import { DELIVERY_STATUS_LABEL, type Delivery } from "@/lib/deliveries";
 
 export const Route = createFileRoute("/_authenticated/delivery-report")({
   head: () => ({
@@ -37,39 +36,11 @@ export const Route = createFileRoute("/_authenticated/delivery-report")({
   component: DeliveryReportPage,
 });
 
-const db = supabase as any;
 const fmt = (n: number) => `৳${Number(n || 0).toLocaleString("en-BD", { maximumFractionDigits: 0 })}`;
 const pct = (a: number, b: number) => (b > 0 ? `${Math.round((a / b) * 100)}%` : "—");
 
-type Kind = "courier" | "local";
-type Stage = "delivered" | "progress" | "cancelled";
-
-/** One parcel, whether it went by courier or with our own rider. */
-type Shipment = {
-  id: string;
-  kind: Kind;
-  at: string;
-  day: string;
-  saleId: string;
-  invoiceNo: string;
-  customer: string;
-  phone: string | null;
-  address: string | null;
-  agentKey: string;
-  agent: string;
-  agentPhone: string | null;
-  tracking: string | null;
-  status: string;
-  statusLabel: string;
-  stage: Stage;
-  productValue: number;
-  charge: number;
-  codCharge: number;
-  /** What the rider / courier collects from the customer. */
-  collect: number;
-  /** Goods already taken back in POS (sale refunded / partly refunded / cancelled). */
-  returnedInPos: boolean;
-};
+type Kind = ShipmentKind;
+type Stage = ParcelStage;
 
 const STAGE_LABEL: Record<Stage, string> = { delivered: "Delivered", progress: "In progress", cancelled: "Cancelled / Returned" };
 const STAGE_TONE: Record<Stage, string> = {
@@ -77,97 +48,6 @@ const STAGE_TONE: Record<Stage, string> = {
   progress: "border-amber-300 bg-amber-50 text-amber-800",
   cancelled: "border-destructive/40 bg-destructive/10 text-destructive",
 };
-const human = (s: string) => s.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
-const num = (v: unknown) => Number(v) || 0;
-
-async function loadShipments(from: string, to: string): Promise<Shipment[]> {
-  const { fromISO, toISO } = dayRangeISO(from, to);
-
-  const [locals, couriers] = await Promise.all([
-    fetchAll<Delivery>(() =>
-      db.from("deliveries").select("*").gte("created_at", fromISO).lte("created_at", toISO).order("created_at").order("id"),
-    ).catch(() => [] as Delivery[]), // delivery tables not created yet → courier only
-    fetchAll<any>(() =>
-      db
-        .from("courier_orders")
-        .select("id,sale_id,invoice_no,courier,status,consignment_id,tracking_code,recipient_name,recipient_phone,recipient_address,sales_total,courier_charge,paid_by,cod_amount,sent_at,created_at")
-        .gte("created_at", fromISO)
-        .lte("created_at", toISO)
-        .neq("status", "failed") // never reached the courier
-        .order("created_at")
-        .order("id"),
-    ),
-  ]);
-
-  // Rider collects the unpaid product amount + the delivery charge; the sale
-  // status shows whether returned parcels were taken back in POS.
-  const sales = await fetchAllIn<{ id: string; total: number; due: number; status: string }>(
-    [...locals.map((d) => d.sale_id), ...couriers.map((c: any) => c.sale_id)],
-    (ids) => db.from("sales").select("id,total,due,status").in("id", ids).order("id"),
-  );
-  const RETURNED = new Set(["refunded", "partial_refund", "void"]);
-  const saleById = new Map(sales.map((s) => [s.id, s]));
-
-  const out: Shipment[] = [];
-  for (const d of locals) {
-    const s = saleById.get(d.sale_id);
-    const charge = num(d.delivery_charge);
-    out.push({
-      id: `L-${d.id}`,
-      kind: "local",
-      at: d.created_at,
-      day: dhakaDayKey(d.created_at),
-      saleId: d.sale_id,
-      invoiceNo: d.invoice_no,
-      customer: d.customer_name || "Walk-in",
-      phone: d.customer_phone,
-      address: d.customer_address,
-      agentKey: `L:${d.delivery_man_id ?? d.delivery_man_name}`,
-      agent: d.delivery_man_name,
-      agentPhone: d.delivery_man_phone,
-      tracking: null,
-      status: d.status,
-      statusLabel: DELIVERY_STATUS_LABEL[d.status] ?? human(d.status),
-      stage: localStage(d.status),
-      productValue: num(s?.total),
-      charge,
-      codCharge: 0,
-      collect: num(s?.due) + charge,
-      returnedInPos: RETURNED.has(String(s?.status)),
-    });
-  }
-  for (const c of couriers) {
-    const sales = num(c.sales_total);
-    const charge = num(c.courier_charge);
-    const cod = num(c.cod_amount);
-    const at = c.sent_at ?? c.created_at;
-    const st = String(c.status || "pending");
-    out.push({
-      id: `C-${c.id}`,
-      kind: "courier",
-      at,
-      day: dhakaDayKey(at),
-      saleId: c.sale_id,
-      invoiceNo: c.invoice_no,
-      customer: c.recipient_name || "—",
-      phone: c.recipient_phone,
-      address: c.recipient_address,
-      agentKey: `C:${c.courier}`,
-      agent: courierName(c.courier),
-      agentPhone: null,
-      tracking: c.tracking_code ?? c.consignment_id ?? null,
-      status: st,
-      statusLabel: human(st),
-      stage: courierStage(st),
-      productValue: sales,
-      charge,
-      codCharge: c.paid_by === "shop" ? 0 : Math.max(0, cod - sales - charge),
-      collect: cod,
-      returnedInPos: RETURNED.has(String(saleById.get(c.sale_id)?.status)),
-    });
-  }
-  return out.sort((a, b) => (a.at < b.at ? 1 : -1));
-}
 
 function downloadCsv(rows: Shipment[], from: string, to: string) {
   const head = ["Date", "Invoice", "Type", "Customer", "Phone", "Address", "Rider / Courier", "Tracking", "Status", "Product value", "Delivery charge", "COD charge", "To collect"];
@@ -307,6 +187,8 @@ function DeliveryReportPage() {
       productValue: sum(live, (s) => s.productValue),
     };
   }, [rows]);
+
+  const money = useMemo(() => deliveryMoney(rows), [rows]);
 
   // Parcels per day, courier vs local.
   const daily = useMemo(() => {
@@ -460,6 +342,16 @@ function DeliveryReportPage() {
         <Stat label="Delivery charges" value={fmt(k.charges)} sub="Not part of sales" />
         <Stat label="COD charges (courier)" value={fmt(k.codCharges)} sub="Added to COD amount" />
       </div>
+
+      {/* Delivery income vs real cost — collecting a charge is not profit by itself. */}
+      <div className="mb-4 grid grid-cols-2 gap-2.5 md:grid-cols-4">
+        <Stat label="Delivery charge income" value={fmt(money.income)} sub="Customer-paid charges on delivered parcels" />
+        <Stat label="Actual delivery cost" value={fmt(money.cost)} sub={money.costMissing ? `${money.costMissing} parcel(s) without cost entered` : "Rider fees + courier deductions"} tone={money.costMissing ? "text-amber-700" : ""} />
+        <Stat label="Net delivery income" value={fmt(money.net)} tone={money.net < 0 ? "text-destructive" : "text-emerald-700"} sub="Income − actual cost" />
+        <Stat label="Waiting to be settled" value={fmt(money.codPending + money.cashPending)} sub={`Courier COD ${fmt(money.codPending)} · rider cash ${fmt(money.cashPending)}`} />
+      </div>
+
+      <DeliverySettlement shipments={all} onChanged={() => qc.invalidateQueries({ queryKey: ["delivery-report"] })} />
 
       <div className="mb-4 grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <Card>

@@ -27,6 +27,7 @@ export const MODULES: ModuleDef[] = [
   { key: "delivery_report", label: "Delivery Report", url: "/delivery-report", group: "Shop" },
 
   { key: "accounts", label: "Accounts", url: "/accounts", group: "Business" },
+  { key: "business_report", label: "Business Report", url: "/business-report", group: "Business" },
   { key: "reports", label: "Reports", url: "/reports", group: "Business" },
   { key: "crm", label: "CRM", url: "/crm", group: "Business" },
   { key: "staff", label: "Staff & Permissions", url: "/staff", group: "Business" },

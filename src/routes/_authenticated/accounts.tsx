@@ -179,7 +179,7 @@ function AccountsPage() {
                       <Select value={expForm.category} onValueChange={(v) => setExpForm({ ...expForm, category: v })}>
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
-                          {["Utilities", "Rent", "Salary", "Supplies", "Equipment", "Marketing", "Transport", "Other"].map(c => (
+                          {["Utilities", "Rent", "Salary", "Supplies", "Equipment", "Marketing", "Transport", "Doctor Fee", "Clinic", "Delivery", "Courier", "Other"].map(c => (
                             <SelectItem key={c} value={c}>{c}</SelectItem>
                           ))}
                         </SelectContent>

@@ -20,6 +20,7 @@ import {
   ClipboardList,
   Bike,
   PackageCheck,
+  LineChart,
   HeartPulse,
   Brain,
 } from "lucide-react";
@@ -60,6 +61,7 @@ const ICONS: Record<string, typeof Users> = {
   deliveries: Bike,
   delivery_report: PackageCheck,
   accounts: Wallet,
+  business_report: LineChart,
   reports: BarChart3,
   crm: Users,
   staff: ShieldCheck,
