@@ -1,0 +1,1 @@
+DROP FUNCTION IF EXISTS public.update_sale(uuid, jsonb, numeric, text, jsonb);

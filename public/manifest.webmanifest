@@ -1,0 +1,16 @@
+{
+  "name": "Pet Care Vet — Clinic ERP & POS",
+  "short_name": "Pet Care Vet",
+  "description": "Veterinary clinic ERP: POS, appointments, pet records, prescriptions, inventory and accounts.",
+  "start_url": "/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F5F5F5",
+  "theme_color": "#F55504",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

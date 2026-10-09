@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1789701412410,
+      "tag": "0000_appointment_relationship_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789704073450,
+      "tag": "0001_clinical_visit_prescription_workflow",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789704516900,
+      "tag": "0002_grant_clinical_visit_permission",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789707090696,
+      "tag": "0003_clinic_surgery_and_appointment_discount",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789707344347,
+      "tag": "0004_grant_clinic_dashboard_permission",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789712779419,
+      "tag": "0005_grant_clinical_intelligence_permission",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790271862381,
+      "tag": "0006_cash_close_reports",
+      "breakpoints": true
+    }
+  ]
+}
