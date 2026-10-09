@@ -12,6 +12,8 @@ type SendInput = {
   quantity: number;
   sales_total: number;
   courier_charge: number;
+  /** COD charge (e.g. 1%) the courier keeps — added to the COD when the customer pays. */
+  cod_charge?: number;
   paid_by: "customer" | "shop";
   note?: string | null;
   resend?: boolean;
@@ -36,7 +38,9 @@ export const sendCourierOrder = createServerFn({ method: "POST" })
 
     const charge = Number(data.courier_charge) || 0;
     const salesTotal = Number(data.sales_total) || 0;
-    const cod = data.paid_by === "customer" ? salesTotal + charge : salesTotal;
+    const base = salesTotal + charge;
+    const codCharge = Math.min(Math.max(0, Number(data.cod_charge) || 0), Math.ceil(base * 0.1));
+    const cod = data.paid_by === "customer" ? base + codCharge : salesTotal;
 
     const { data: existing, error: exErr } = await supabase
       .from("courier_orders")

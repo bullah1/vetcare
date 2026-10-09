@@ -25,14 +25,14 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { ReturnFlow } from "@/components/ReturnFlow";
 import { SalesHistory } from "@/components/SalesHistory";
 import { toast } from "sonner";
-import { printInvoice, printThermal, type Receipt } from "@/lib/invoice-print";
+import { printInvoice, printThermal, receiptExtras, type Receipt } from "@/lib/invoice-print";
 import { useEffect } from "react";
 import { resolveProductImageUrl } from "@/components/ProductImageUpload";
 import ThermalPrinterSettings from "@/components/ThermalPrinterSettings";
 import { Link } from "@tanstack/react-router";
 import { useWhatsAppInvoice } from "@/lib/use-whatsapp-invoice";
 import { DeliveryDialog } from "@/components/DeliveryDialog";
-import { createDelivery, deliveryForReceipt, fetchDeliveryMen, saveDeliveryMan } from "@/lib/deliveries";
+import { createDelivery, deliveryForReceipt, fetchActiveDelivery, fetchDeliveryMen, saveDeliveryMan } from "@/lib/deliveries";
 import {
   HELD_CHANNEL_LABELS,
   cancelHeldBill,
@@ -921,7 +921,9 @@ function POSPage() {
         try {
           await createDelivery({ saleId: rpc.sale_id, deliveryManId: delManId, charge: delChargeNum, address: delAddress, note: delNote });
           const man = deliveryMen.find((m) => m.id === delManId);
-          snapshot.delivery = { charge: delChargeNum, man: man?.name ?? null };
+          snapshot.delivery =
+            deliveryForReceipt(await fetchActiveDelivery(rpc.sale_id)) ??
+            { kind: "local", charge: delChargeNum, man: man?.name ?? null, manPhone: man?.phone ?? null, address: delAddress || null, status: "Pending" };
         } catch (e: any) {
           toast.error(`Bill saved, but the delivery was not created: ${e?.message ?? e}. Use "Send for delivery".`);
         }
@@ -1543,8 +1545,8 @@ function POSPage() {
             <div className="space-y-4 px-5 py-4">
               <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-lg border bg-muted/30 p-3">
-                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Total</p>
-                  <p className="text-lg font-bold tabular-nums">৳ {Number(receipt.total).toFixed(2)}</p>
+                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{receipt.delivery ? "Total bill" : "Total"}</p>
+                  <p className="text-lg font-bold tabular-nums">৳ {(receipt.delivery ? receiptExtras(receipt).total : Number(receipt.total)).toFixed(2)}</p>
                 </div>
                 <div className={`rounded-lg border p-3 ${Number(receipt.due) > 0 ? "border-destructive/30 bg-destructive/5" : "bg-muted/30"}`}>
                   <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{Number(receipt.due) > 0 ? "Due" : "Paid"}</p>
@@ -1583,6 +1585,24 @@ function POSPage() {
                   {Number(receipt.due) > 0 && (
                     <div className="flex justify-between font-medium text-destructive"><span>Remaining due</span><span className="tabular-nums">৳ {Number(receipt.due).toFixed(2)}</span></div>
                   )}
+                  {receipt.delivery && (() => {
+                    const x = receiptExtras(receipt);
+                    const d = receipt.delivery!;
+                    return (
+                      <div className="mt-2 space-y-1 rounded-md border border-sky-200 bg-sky-50/70 p-2">
+                        <div className="flex items-center justify-between font-medium text-sky-900">
+                          <span className="flex items-center gap-1.5"><Bike className="h-3.5 w-3.5" /> {d.kind === "courier" ? "Courier delivery" : "Local delivery"}</span>
+                          {d.status && <span className="text-xs font-normal">{d.status}</span>}
+                        </div>
+                        {d.man && <div className="flex justify-between"><span className="text-muted-foreground">Rider</span><span>{d.man}{d.manPhone ? ` · ${d.manPhone}` : ""}</span></div>}
+                        {d.trackingCode && <div className="flex justify-between"><span className="text-muted-foreground">Tracking</span><span>{d.trackingCode}</span></div>}
+                        {x.delivery > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Delivery charge</span><span className="tabular-nums">৳ {x.delivery.toFixed(2)}</span></div>}
+                        {x.cod > 0 && <div className="flex justify-between"><span className="text-muted-foreground">COD charge</span><span className="tabular-nums">৳ {x.cod.toFixed(2)}</span></div>}
+                        <div className="flex justify-between font-semibold"><span>Total bill</span><span className="tabular-nums">৳ {x.total.toFixed(2)}</span></div>
+                        {x.collect > 0 && <div className="flex justify-between font-semibold text-destructive"><span>Rider collects</span><span className="tabular-nums">৳ {x.collect.toFixed(2)}</span></div>}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             </div>

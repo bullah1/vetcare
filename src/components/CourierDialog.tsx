@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
-import { Truck, RefreshCw, CheckCircle2, XCircle, Printer } from "lucide-react";
+import { Truck, RefreshCw, CheckCircle2, XCircle, Printer, FileText, MessageCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { sendCourierOrder, refreshCourierStatus } from "@/lib/courier.functions";
 import { printCourierLabel, type CourierLabelData } from "@/lib/courier-label";
+import { printInvoice, shareInvoiceOnWhatsApp, courierTrackingUrl } from "@/lib/invoice-print";
+import { fetchSaleReceipt } from "@/lib/sale-receipt";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -48,7 +50,10 @@ export function CourierDialog({ saleId, onClose, onSaved }: Props) {
   const [charge, setCharge] = useState("0");
   const [paidBy, setPaidBy] = useState<"customer" | "shop">("customer");
   const [note, setNote] = useState("");
+  // Steadfast keeps 1% of the cash it collects, so it is added to the COD.
+  const [codPct, setCodPct] = useState("1");
   const [busy, setBusy] = useState(false);
+  const qc = useQueryClient();
   const [result, setResult] = useState<{ ok: boolean; message?: string; consignment_id?: string | null; tracking_code?: string | null; status?: string | null; cod_amount?: number } | null>(null);
 
   const { data, isFetching, refetch } = useQuery({
@@ -84,6 +89,11 @@ export function CourierDialog({ saleId, onClose, onSaved }: Props) {
     setCharge(String(order?.courier_charge ?? 0));
     setPaidBy((order?.paid_by as any) ?? "customer");
     setNote(order?.note ?? "");
+    if (order && order.paid_by !== "shop") {
+      const base = Number(order.sales_total) + Number(order.courier_charge);
+      const extra = Number(order.cod_amount) - base;
+      setCodPct(base > 0 && extra > 0 ? String(Math.round((extra / base) * 1000) / 10) : "0");
+    } else setCodPct("1");
   }, [sale?.id, order?.id]);
 
   const items: { name: string; quantity: number }[] = sale?.sale_items ?? [];
@@ -95,7 +105,18 @@ export function CourierDialog({ saleId, onClose, onSaved }: Props) {
 
   const salesTotal = Number(sale?.total ?? 0);
   const chargeNum = Number(charge) || 0;
-  const cod = paidBy === "customer" ? salesTotal + chargeNum : salesTotal;
+  const pctNum = Math.min(10, Math.max(0, Number(codPct) || 0));
+  // Rounded up to a whole taka so the shop never falls short.
+  const codCharge = paidBy === "customer" ? Math.ceil(((salesTotal + chargeNum) * pctNum) / 100) : 0;
+  const cod = paidBy === "customer" ? salesTotal + chargeNum + codCharge : salesTotal;
+
+  // Ready-made customer invoice (products + courier + tracking) once sent.
+  const { data: invoice } = useQuery({
+    queryKey: ["courier-invoice", saleId, order?.status, order?.consignment_id, order?.cod_amount],
+    enabled: !!saleId && !!order && !["failed", "cancelled"].includes(order.status),
+    staleTime: 0,
+    queryFn: () => fetchSaleReceipt(saleId!),
+  });
 
   const alreadySent = !!order && !["failed", "cancelled"].includes(order.status);
 
@@ -116,6 +137,7 @@ export function CourierDialog({ saleId, onClose, onSaved }: Props) {
           quantity,
           sales_total: salesTotal,
           courier_charge: chargeNum,
+          cod_charge: codCharge,
           paid_by: paidBy,
           note: note || null,
           resend,
@@ -125,6 +147,7 @@ export function CourierDialog({ saleId, onClose, onSaved }: Props) {
       if (res.ok) toast.success("Courier order sent successfully");
       else toast.error(res.message ?? "Courier order failed");
       await refetch();
+      qc.invalidateQueries({ queryKey: ["receipt-delivery"] });
       onSaved?.();
     } catch (e: any) {
       const msg = e?.message ?? "Courier order failed";
@@ -236,11 +259,27 @@ export function CourierDialog({ saleId, onClose, onSaved }: Props) {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="sm:col-span-2">
+              {paidBy === "customer" && (
+                <div>
+                  <Label className="text-xs">COD charge %</Label>
+                  <Input value={codPct} onChange={(e) => setCodPct(e.target.value.replace(/[^0-9.]/g, ""))} inputMode="decimal" className="h-10" />
+                </div>
+              )}
+              <div className={paidBy === "customer" ? "" : "sm:col-span-2"}>
                 <Label className="text-xs">COD amount (auto)</Label>
                 <Input value={cod.toFixed(2)} readOnly className="h-10 bg-muted font-semibold tabular-nums" />
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  {paidBy === "customer" ? "Sales total + courier charge" : "Sales total only"} — courier charge is never added to sales.
+              </div>
+              <div className="sm:col-span-2 rounded-lg border p-2.5 text-xs space-y-1">
+                <div className="flex justify-between"><span className="text-muted-foreground">Product amount</span><span className="tabular-nums">{fmt(salesTotal)}</span></div>
+                {paidBy === "customer" && (
+                  <>
+                    <div className="flex justify-between"><span className="text-muted-foreground">Delivery charge</span><span className="tabular-nums">{fmt(chargeNum)}</span></div>
+                    <div className="flex justify-between"><span className="text-muted-foreground">COD charge ({pctNum}%)</span><span className="tabular-nums">{fmt(codCharge)}</span></div>
+                  </>
+                )}
+                <div className="flex justify-between border-t pt-1 font-semibold"><span>Customer pays (COD)</span><span className="tabular-nums">{fmt(cod)}</span></div>
+                <p className="text-[11px] text-muted-foreground">
+                  {paidBy === "customer" ? "Delivery + COD charge are added to the COD only" : "Shop pays the charges"} — never added to sales.
                 </p>
               </div>
               <div className="sm:col-span-2">
@@ -253,6 +292,9 @@ export function CourierDialog({ saleId, onClose, onSaved }: Props) {
               <div className="rounded-lg border bg-muted/40 p-3 text-sm space-y-1.5">
                 <div className="flex justify-between gap-3"><span className="shrink-0 text-muted-foreground">Consignment ID</span><span className="min-w-0 break-all text-right font-medium">{order.consignment_id}</span></div>
                 {order.tracking_code && <div className="flex justify-between gap-3"><span className="shrink-0 text-muted-foreground">Tracking code</span><span className="min-w-0 break-all text-right font-medium">{order.tracking_code}</span></div>}
+                {courierTrackingUrl(order.courier, order.tracking_code) && (
+                  <div className="flex justify-between gap-3"><span className="shrink-0 text-muted-foreground">Tracking link</span><a href={courierTrackingUrl(order.courier, order.tracking_code)!} target="_blank" rel="noreferrer" className="min-w-0 break-all text-right font-medium text-primary underline">Open</a></div>
+                )}
                 {order.sent_at && <div className="flex justify-between gap-3"><span className="shrink-0 text-muted-foreground">Sent at</span><span className="min-w-0 text-right">{new Date(order.sent_at).toLocaleString()}</span></div>}
                 <div className="flex justify-between gap-3"><span className="shrink-0 text-muted-foreground">COD sent</span><span className="tabular-nums font-semibold">{fmt(Number(order.cod_amount))}</span></div>
               </div>
@@ -288,6 +330,22 @@ export function CourierDialog({ saleId, onClose, onSaved }: Props) {
             <Button variant="secondary" onClick={doPrintLabel} disabled={busy}>
               <Printer className="h-4 w-4" /> Print Label
             </Button>
+          )}
+          {invoice && (
+            <>
+              <Button variant="outline" onClick={() => printInvoice(invoice)} disabled={busy}>
+                <FileText className="h-4 w-4" /> Invoice
+              </Button>
+              <Button
+                variant="outline"
+                className="border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                onClick={() => shareInvoiceOnWhatsApp(invoice, order?.recipient_phone ?? undefined)}
+                disabled={busy}
+                title="Send the invoice with tracking number to the customer"
+              >
+                <MessageCircle className="h-4 w-4" /> Send to customer
+              </Button>
+            </>
           )}
           {alreadySent ? (
             <>

@@ -12,7 +12,7 @@ import { format } from "date-fns";
 import { printInvoice, printThermal, type Receipt as PrintReceipt } from "@/lib/invoice-print";
 import { useWhatsAppInvoice } from "@/lib/use-whatsapp-invoice";
 import { DeliveryDialog } from "@/components/DeliveryDialog";
-import { deliveryForReceipt, fetchActiveDelivery, DELIVERY_STATUS_LABEL } from "@/lib/deliveries";
+import { deliveryForReceipt, fetchActiveDelivery, fetchReceiptDelivery, DELIVERY_STATUS_LABEL } from "@/lib/deliveries";
 
 type SaleRow = {
   id: string;
@@ -114,7 +114,18 @@ export function SalesHistory({ trigger }: { trigger?: React.ReactNode }) {
     enabled: !!detail?.id,
     queryFn: () => fetchActiveDelivery(detail!.id),
   });
-  const withDelivery = (r: PrintReceipt): PrintReceipt => ({ ...r, delivery: deliveryForReceipt(detailDelivery) });
+  // Courier parcel (tracking no., COD) or local delivery (rider) for the invoice.
+  const { data: detailShip } = useQuery({
+    queryKey: ["receipt-delivery", detail?.id, detailDelivery?.id ?? null, detailDelivery?.status ?? null],
+    enabled: !!detail?.id,
+    staleTime: 0,
+    queryFn: () => fetchReceiptDelivery(detail!.id),
+  });
+  const withDelivery = (r: PrintReceipt): PrintReceipt => ({
+    ...r,
+    sale_id: detail?.id,
+    delivery: detailShip !== undefined ? detailShip : deliveryForReceipt(detailDelivery),
+  });
 
   return (
     <>

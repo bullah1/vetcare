@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import type { ReceiptDelivery } from "@/lib/invoice-print";
 
 /**
  * Delivery module — TRACKING / DATA ONLY.
@@ -149,7 +150,67 @@ export async function fetchActiveDelivery(saleId: string): Promise<Delivery | nu
   return (data as Delivery) ?? null;
 }
 
-/** Invoice print info for an active delivery (charge shown, not added to the sale). */
-export function deliveryForReceipt(d: Delivery | null | undefined) {
-  return d ? { charge: Number(d.delivery_charge) || 0, man: d.delivery_man_name } : null;
+/** Invoice print info for an active local delivery (charge shown, not added to the sale). */
+export function deliveryForReceipt(d: Delivery | null | undefined): ReceiptDelivery | null {
+  return d
+    ? {
+        kind: "local",
+        charge: Number(d.delivery_charge) || 0,
+        man: d.delivery_man_name,
+        manPhone: d.delivery_man_phone,
+        address: d.customer_address,
+        status: DELIVERY_STATUS_LABEL[d.status] ?? d.status,
+        note: d.note,
+      }
+    : null;
+}
+
+type CourierOrderRow = {
+  courier: string;
+  status: string;
+  consignment_id: string | null;
+  tracking_code: string | null;
+  recipient_address: string | null;
+  sales_total: number;
+  courier_charge: number;
+  paid_by: "customer" | "shop";
+  cod_amount: number;
+  note: string | null;
+};
+
+/** Invoice print info for a courier parcel (Steadfast). */
+export function courierForReceipt(o: CourierOrderRow | null | undefined): ReceiptDelivery | null {
+  if (!o) return null;
+  const sales = Number(o.sales_total) || 0;
+  const charge = Number(o.courier_charge) || 0;
+  const cod = Number(o.cod_amount) || 0;
+  const customer = o.paid_by !== "shop";
+  return {
+    kind: "courier",
+    courier: o.courier,
+    consignmentId: o.consignment_id,
+    trackingCode: o.tracking_code,
+    address: o.recipient_address,
+    status: o.status,
+    paidBy: o.paid_by,
+    charge,
+    // COD charge is whatever the COD amount holds above product + delivery.
+    codCharge: customer ? Math.max(0, Math.round((cod - sales - charge) * 100) / 100) : 0,
+    collect: cod,
+    note: o.note,
+  };
+}
+
+/**
+ * Everything the invoice shows about how this sale reaches the customer:
+ * a courier parcel that was sent, otherwise the active local delivery.
+ */
+export async function fetchReceiptDelivery(saleId: string): Promise<ReceiptDelivery | null> {
+  const { data: co } = await db
+    .from("courier_orders")
+    .select("courier,status,consignment_id,tracking_code,recipient_address,sales_total,courier_charge,paid_by,cod_amount,note")
+    .eq("sale_id", saleId)
+    .maybeSingle();
+  if (co && !["failed", "cancelled"].includes(co.status)) return courierForReceipt(co as CourierOrderRow);
+  return deliveryForReceipt(await fetchActiveDelivery(saleId));
 }

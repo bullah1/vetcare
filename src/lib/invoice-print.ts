@@ -34,15 +34,73 @@ export type Receipt = {
   payments?: InvoicePayment[];
   status?: string;
   notes?: string | null;
-  /** Active delivery of this invoice (Delivery module). Shown on the invoice
-   *  only — the delivery charge is NOT part of the sale's total/paid/due. */
-  delivery?: { charge: number; man?: string | null } | null;
+  /** Local delivery (rider) or courier parcel of this invoice. Shown on the
+   *  invoice only — the charges are NOT part of the sale's total/paid/due. */
+  delivery?: ReceiptDelivery | null;
 };
 
-/** Delivery charge shown on the invoice (0 when there is no active delivery). */
-const deliveryCharge = (r: Receipt) => Math.max(0, Number(r.delivery?.charge || 0));
-/** What the customer still has to hand over: unpaid product due + delivery charge. */
-const toCollect = (r: Receipt) => Number(r.due || 0) + deliveryCharge(r);
+export type ReceiptDelivery = {
+  /** "local" = own delivery man / rider, "courier" = Steadfast etc. */
+  kind?: "local" | "courier";
+  /** Delivery / courier charge. */
+  charge: number;
+  /** Courier COD charge (e.g. 1% of the amount collected). */
+  codCharge?: number;
+  /** Who pays the charges. "shop" → the customer's bill does not include them. */
+  paidBy?: "customer" | "shop";
+  /** Exact amount the rider / courier collects from the customer (courier COD). */
+  collect?: number | null;
+  man?: string | null;
+  manPhone?: string | null;
+  courier?: string | null;
+  consignmentId?: string | null;
+  trackingCode?: string | null;
+  address?: string | null;
+  status?: string | null;
+  note?: string | null;
+};
+
+const COURIER_NAMES: Record<string, string> = { steadfast: "Steadfast Courier" };
+export const courierName = (c?: string | null) => (c ? COURIER_NAMES[c] ?? c : "Courier");
+
+/** Public tracking page for a parcel (customer can open it). */
+export function courierTrackingUrl(courier?: string | null, trackingCode?: string | null) {
+  if (!trackingCode) return null;
+  if (!courier || courier === "steadfast") return `https://steadfast.com.bd/t/${encodeURIComponent(trackingCode)}`;
+  return null;
+}
+
+const humanStatus = (s?: string | null) => (s ? s.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase()) : "");
+
+const onCustomer = (r: Receipt) => !!r.delivery && r.delivery.paidBy !== "shop";
+/** Delivery charge on the customer's bill (0 when none, or the shop pays it). */
+const deliveryCharge = (r: Receipt) => (onCustomer(r) ? Math.max(0, Number(r.delivery?.charge || 0)) : 0);
+/** Courier COD charge on the customer's bill. */
+const codChargeOf = (r: Receipt) => (onCustomer(r) ? Math.max(0, Number(r.delivery?.codCharge || 0)) : 0);
+/** All delivery extras on the customer's bill. */
+const extras = (r: Receipt) => deliveryCharge(r) + codChargeOf(r);
+/** What the customer hands over on delivery. */
+export const receiptExtras = (r: Receipt) => ({ delivery: deliveryCharge(r), cod: codChargeOf(r), total: r.total + extras(r), collect: toCollect(r) });
+const toCollect = (r: Receipt) =>
+  r.delivery?.collect != null ? Math.max(0, Number(r.delivery.collect)) : Number(r.due || 0) + extras(r);
+
+/** Short "who delivers" lines, used by every invoice format. */
+function deliveryLines(r: Receipt): [string, string][] {
+  const d = r.delivery;
+  if (!d) return [];
+  const out: [string, string][] = [];
+  if (d.kind === "courier") {
+    out.push(["Courier", courierName(d.courier)]);
+    if (d.consignmentId) out.push(["Consignment ID", d.consignmentId]);
+    if (d.trackingCode) out.push(["Tracking No", d.trackingCode]);
+  } else {
+    out.push(["Delivery", "Local delivery"]);
+    if (d.man) out.push(["Rider", d.man + (d.manPhone ? ` (${d.manPhone})` : "")]);
+  }
+  if (d.address) out.push(["Address", d.address]);
+  if (d.status) out.push(["Status", humanStatus(d.status)]);
+  return out;
+}
 
 export function escapeHtml(s: unknown) {
   return String(s ?? "")
@@ -56,7 +114,7 @@ const money = (n: number) => `${getClinic().currency} ${Number(n || 0).toFixed(2
 
 // Build a WhatsApp-friendly plain text invoice summary and open wa.me.
 // Uses the same clinic branding + item/payment breakdown as the printed invoice.
-export function shareInvoiceOnWhatsApp(r: Receipt, phoneOverride?: string) {
+export function shareInvoiceOnWhatsApp(r: Receipt, phoneOverride?: string, targetWindow?: Window | null) {
   const CLINIC = getClinic();
   const rawPhone = (phoneOverride ?? r.owner?.phone ?? "").replace(/[^\d]/g, "");
   // Assume Bangladesh if a leading 0 is given (01XXXXXXXXX -> 8801XXXXXXXXX)
@@ -74,6 +132,12 @@ export function shareInvoiceOnWhatsApp(r: Receipt, phoneOverride?: string) {
   lines.push(`*Invoice:* ${r.invoice_no}`);
   lines.push(`*Date:* ${dateStr}`);
   if (r.owner?.full_name) lines.push(`*Customer:* ${r.owner.full_name}`);
+  if (r.delivery) {
+    lines.push("");
+    for (const [k, v] of deliveryLines(r)) lines.push(`*${k}:* ${v}`);
+    const url = r.delivery.kind === "courier" ? courierTrackingUrl(r.delivery.courier, r.delivery.trackingCode) : null;
+    if (url) lines.push(`*Track your parcel:* ${url}`);
+  }
   lines.push("");
   lines.push("*Items*");
   r.items.forEach((it, i) => {
@@ -83,12 +147,13 @@ export function shareInvoiceOnWhatsApp(r: Receipt, phoneOverride?: string) {
   lines.push(`Subtotal: ${money(r.subtotal)}`);
   if (r.discount) lines.push(`Discount: -${money(r.discount)}`);
   if (r.tax) lines.push(`Tax: ${money(r.tax)}`);
-  if (deliveryCharge(r) > 0) {
+  if (r.delivery) {
     lines.push(`Product total: ${money(r.total)}`);
-    lines.push(`Delivery charge: ${money(deliveryCharge(r))}`);
-    lines.push(`*Total bill: ${money(r.total + deliveryCharge(r))}*`);
+    if (deliveryCharge(r) > 0) lines.push(`Delivery charge: ${money(deliveryCharge(r))}`);
+    if (codChargeOf(r) > 0) lines.push(`COD charge: ${money(codChargeOf(r))}`);
+    lines.push(`*Total bill: ${money(r.total + extras(r))}*`);
     lines.push(`Paid: ${money(r.paid)}`);
-    if (toCollect(r) > 0) lines.push(`*To collect: ${money(toCollect(r))}*`);
+    if (toCollect(r) > 0) lines.push(`*${r.delivery.kind === "courier" ? "Cash on delivery" : "To collect"}: ${money(toCollect(r))}*`);
   } else {
     lines.push(`*Total: ${money(r.total)}*`);
     lines.push(`Paid: ${money(r.paid)}`);
@@ -102,6 +167,10 @@ export function shareInvoiceOnWhatsApp(r: Receipt, phoneOverride?: string) {
 
   const text = encodeURIComponent(lines.join("\n"));
   const url = phone ? `https://wa.me/${phone}?text=${text}` : `https://wa.me/?text=${text}`;
+  if (targetWindow) {
+    targetWindow.location.href = url;
+    return;
+  }
   const win = window.open(url, "_blank", "noopener,noreferrer");
   if (!win) toast.error("Pop-up blocked. Please allow pop-ups to share on WhatsApp.");
 }
@@ -115,7 +184,8 @@ function paymentSummary(r: Receipt): string {
   return r.method || "—";
 }
 
-export function printInvoice(r: Receipt) {
+/** `targetWindow`: a window opened beforehand (lets callers load data first without a pop-up block). */
+export function printInvoice(r: Receipt, targetWindow?: Window | null) {
   const CLINIC = getClinic();
   const issued = new Date(r.issued_at);
   const printedAt = new Date();
@@ -170,6 +240,13 @@ export function printInvoice(r: Receipt) {
   .info{display:grid;grid-template-columns:1fr 1fr;gap:10px 24px;border:1px solid #e5e7eb;border-radius:8px;padding:12px 16px;margin:16px 0 18px;background:#f8fafc}
   .info .label{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b}
   .info .value{font-size:13px;font-weight:600;color:#0f172a}
+  .dlv{border:1.5px solid #0f766e;border-radius:8px;padding:10px 16px;margin:-6px 0 18px;background:#f0fdfa}
+  .dlv-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#0f766e;margin-bottom:6px}
+  .dlv-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 24px}
+  .dlv .label{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b}
+  .dlv .value{font-size:12.5px;font-weight:600;color:#0f172a;word-break:break-word}
+  .dlv-track{margin-top:8px;font-size:11.5px;color:#334155}
+  .dlv-track a{color:#0f766e;font-weight:600}
   table{width:100%;border-collapse:collapse;margin-top:4px;font-size:12.5px}
   thead th{text-align:left;background:#0f766e;color:#fff;padding:8px 10px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
   thead th.right{text-align:right}
@@ -207,7 +284,7 @@ export function printInvoice(r: Receipt) {
       <div class="lic">Clinic License: ${escapeHtml(CLINIC.license)}</div>
     </div>
     <div>
-      <div class="doc-title">Tax Invoice</div>
+      <div class="doc-title">${r.delivery ? "Delivery Invoice" : "Tax Invoice"}</div>
       <div class="doc-meta">
         <div><span class="k">Invoice:</span> <span class="id">${escapeHtml(r.invoice_no)}</span></div>
         <div><span class="k">Issued:</span> ${escapeHtml(issued.toLocaleString())}</div>
@@ -229,6 +306,16 @@ export function printInvoice(r: Receipt) {
   }</div></div>
     <div><div class="label">Payment</div><div class="value" style="text-transform:capitalize;font-size:11.5px">${escapeHtml(paymentSummary(r))}</div></div>
   </div>
+  ${r.delivery ? (() => {
+    const url = r.delivery.kind === "courier" ? courierTrackingUrl(r.delivery.courier, r.delivery.trackingCode) : null;
+    return `<div class="dlv">
+    <div class="dlv-title">${r.delivery.kind === "courier" ? "Courier Delivery" : "Local Delivery"}</div>
+    <div class="dlv-grid">${deliveryLines(r)
+      .map(([k, v]) => `<div><div class="label">${escapeHtml(k)}</div><div class="value">${escapeHtml(v)}</div></div>`)
+      .join("")}</div>
+    ${url ? `<div class="dlv-track">Track your parcel: <a href="${escapeHtml(url)}">${escapeHtml(url)}</a></div>` : ""}
+  </div>`;
+  })() : ""}
 
   <table>
     <thead><tr><th>#</th><th>Item</th><th class="right">Qty</th><th class="right">Price</th><th class="right">Disc</th><th class="right">Tax</th><th class="right">Total</th></tr></thead>
@@ -239,12 +326,13 @@ export function printInvoice(r: Receipt) {
     <div class="row"><span class="muted">Subtotal</span><span>${money(r.subtotal)}</span></div>
     <div class="row"><span class="muted">Tax</span><span>${money(r.tax)}</span></div>
     <div class="row"><span class="muted">Discount</span><span>− ${money(r.discount)}</span></div>
-    ${deliveryCharge(r) > 0
+    ${r.delivery
       ? `<div class="row"><span>Product Total</span><span>${money(r.total)}</span></div>
-    <div class="row"><span class="muted">Delivery Charge${r.delivery?.man ? ` (${escapeHtml(r.delivery.man)})` : ""}</span><span>${money(deliveryCharge(r))}</span></div>
-    <div class="row grand"><span>Total Bill</span><span>${money(r.total + deliveryCharge(r))}</span></div>
+    ${deliveryCharge(r) > 0 ? `<div class="row"><span class="muted">Delivery Charge</span><span>${money(deliveryCharge(r))}</span></div>` : ""}
+    ${codChargeOf(r) > 0 ? `<div class="row"><span class="muted">COD Charge</span><span>${money(codChargeOf(r))}</span></div>` : ""}
+    <div class="row grand"><span>Total Bill</span><span>${money(r.total + extras(r))}</span></div>
     <div class="row"><span class="muted">Paid</span><span>${money(r.paid)}</span></div>
-    ${toCollect(r) > 0 ? `<div class="row due"><span>To Collect</span><span>${money(toCollect(r))}</span></div>` : ""}`
+    ${toCollect(r) > 0 ? `<div class="row due"><span>${r.delivery.kind === "courier" ? "Cash on Delivery" : "To Collect"}</span><span>${money(toCollect(r))}</span></div>` : ""}`
       : `<div class="row grand"><span>Grand Total</span><span>${money(r.total)}</span></div>
     <div class="row"><span class="muted">Paid</span><span>${money(r.paid)}</span></div>
     ${r.due > 0 ? `<div class="row due"><span>Due</span><span>${money(r.due)}</span></div>` : ""}`}
@@ -252,8 +340,12 @@ export function printInvoice(r: Receipt) {
 
   ${paymentsBlock}
 
-  <div class="pay">Thank you for choosing ${escapeHtml(CLINIC.name)}. Please retain this invoice for your records${
-    r.due > 0 ? ` — outstanding balance of ${money(r.due)} is payable at your next visit.` : "."
+  <div class="pay">Thank you for choosing ${escapeHtml(CLINIC.name)}. ${
+    r.delivery
+      ? toCollect(r) > 0
+        ? `Please pay ${money(toCollect(r))} to the ${r.delivery.kind === "courier" ? "courier" : "delivery man"} when you receive your order.`
+        : "Your order is fully paid — nothing to pay on delivery."
+      : `Please retain this invoice for your records${r.due > 0 ? ` — outstanding balance of ${money(r.due)} is payable at your next visit.` : "."}`
   }</div>
 
   ${r.notes ? `<div class="notes"><strong>Note:</strong> ${escapeHtml(r.notes)}</div>` : ""}
@@ -271,7 +363,7 @@ export function printInvoice(r: Receipt) {
 <script>window.onload=function(){setTimeout(function(){window.print();},200);}</script>
 </body></html>`;
 
-  const w = window.open("", "_blank", "width=900,height=1000");
+  const w = targetWindow ?? window.open("", "_blank", "width=900,height=1000");
   if (!w) {
     toast.error("Enable pop-ups to print the invoice");
     return;
@@ -386,6 +478,9 @@ export function printThermal(r: Receipt, override?: Partial<ThermalSettings>) {
   <div class="kv"><span>Date</span><span>${escapeHtml(issued.toLocaleString())}</span></div>
   <div class="kv"><span>Customer</span><span>${escapeHtml(r.owner?.full_name ?? "Walk-in")}</span></div>
   ${r.owner?.phone ? `<div class="kv"><span>Phone</span><span>${escapeHtml(r.owner.phone)}</span></div>` : ""}
+  ${r.delivery ? `<div class="sep"></div><div class="center"><b>${r.delivery.kind === "courier" ? "COURIER DELIVERY" : "LOCAL DELIVERY"}</b></div>${deliveryLines(r)
+    .map(([k, v]) => `<div class="kv"><span>${escapeHtml(k)}</span><span style="white-space:normal;text-align:right">${escapeHtml(v)}</span></div>`)
+    .join("")}` : ""}
   <div class="sep"></div>`;
 
   const itemsBlock = `${rows}
@@ -393,12 +488,13 @@ export function printThermal(r: Receipt, override?: Partial<ThermalSettings>) {
   <div class="tot"><span>Subtotal</span><span>${money(r.subtotal)}</span></div>
   <div class="tot"><span>Tax</span><span>${money(r.tax)}</span></div>
   <div class="tot"><span>Discount</span><span>− ${money(r.discount)}</span></div>
-  ${deliveryCharge(r) > 0
+  ${r.delivery
     ? `<div class="tot"><span>Product total</span><span>${money(r.total)}</span></div>
-  <div class="tot"><span>Delivery</span><span>${money(deliveryCharge(r))}</span></div>
-  <div class="tot grand"><span>TOTAL BILL</span><span>${money(r.total + deliveryCharge(r))}</span></div>
+  ${deliveryCharge(r) > 0 ? `<div class="tot"><span>Delivery</span><span>${money(deliveryCharge(r))}</span></div>` : ""}
+  ${codChargeOf(r) > 0 ? `<div class="tot"><span>COD charge</span><span>${money(codChargeOf(r))}</span></div>` : ""}
+  <div class="tot grand"><span>TOTAL BILL</span><span>${money(r.total + extras(r))}</span></div>
   ${payLines}
-  ${toCollect(r) > 0 ? `<div class="tot"><span>To collect</span><span>${money(toCollect(r))}</span></div>` : ""}`
+  ${toCollect(r) > 0 ? `<div class="tot"><span>${r.delivery.kind === "courier" ? "COD" : "To collect"}</span><span>${money(toCollect(r))}</span></div>` : ""}`
     : `<div class="tot grand"><span>TOTAL</span><span>${money(r.total)}</span></div>
   ${payLines}
   ${r.due > 0 ? `<div class="tot"><span>Due</span><span>${money(r.due)}</span></div>` : ""}`}

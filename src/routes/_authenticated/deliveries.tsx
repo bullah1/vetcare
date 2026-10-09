@@ -3,7 +3,9 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { Bike, History, Pencil, Plus, Search, Users } from "lucide-react";
+import { Bike, FileText, History, MessageCircle, Pencil, Plus, Search, Users } from "lucide-react";
+import { printInvoice, shareInvoiceOnWhatsApp } from "@/lib/invoice-print";
+import { fetchSaleReceipt } from "@/lib/sale-receipt";
 import { supabase } from "@/integrations/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent } from "@/components/ui/card";
@@ -88,6 +90,22 @@ function DeliveriesTab() {
   const [statusFilter, setStatusFilter] = useState<"all" | DeliveryStatus>("all");
   const [q, setQ] = useState("");
   const [historyFor, setHistoryFor] = useState<Delivery | null>(null);
+
+  // The window is opened on the click itself (so it is not blocked as a pop-up),
+  // then filled once the invoice has loaded.
+  const openInvoice = async (saleId: string, mode: "print" | "whatsapp", phone?: string | null) => {
+    const w = window.open("", "_blank", mode === "print" ? "width=900,height=1000" : undefined);
+    if (!w) { toast.error("Enable pop-ups to open the invoice"); return; }
+    w.document.write("<p style=\"font:14px system-ui;padding:24px\">Loading invoice…</p>");
+    try {
+      const r = await fetchSaleReceipt(saleId);
+      if (mode === "print") printInvoice(r, w);
+      else shareInvoiceOnWhatsApp(r, phone ?? undefined, w);
+    } catch (e: any) {
+      w.close();
+      toast.error(e?.message ?? "Could not load the invoice");
+    }
+  };
   const [editFor, setEditFor] = useState<Delivery | null>(null);
   const [cancelFor, setCancelFor] = useState<Delivery | null>(null);
 
@@ -244,6 +262,12 @@ function DeliveriesTab() {
                             <Pencil className="h-4 w-4" />
                           </Button>
                         )}
+                        <Button size="icon" variant="ghost" className="h-8 w-8" title="Delivery invoice (rider details)" onClick={() => openInvoice(d.sale_id, "print")}>
+                          <FileText className="h-4 w-4" />
+                        </Button>
+                        <Button size="icon" variant="ghost" className="h-8 w-8 text-emerald-700" title="Send invoice to customer (WhatsApp)" onClick={() => openInvoice(d.sale_id, "whatsapp", d.customer_phone)}>
+                          <MessageCircle className="h-4 w-4" />
+                        </Button>
                         <Button size="icon" variant="ghost" className="h-8 w-8" title="Status history" onClick={() => setHistoryFor(d)}>
                           <History className="h-4 w-4" />
                         </Button>
