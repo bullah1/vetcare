@@ -32,6 +32,7 @@ import ThermalPrinterSettings from "@/components/ThermalPrinterSettings";
 import { Link } from "@tanstack/react-router";
 import { useWhatsAppInvoice } from "@/lib/use-whatsapp-invoice";
 import { DeliveryDialog } from "@/components/DeliveryDialog";
+import { DeliveryRiskBadge } from "@/lib/customer-risk";
 import { createDelivery, deliveryForReceipt, fetchActiveDelivery, fetchDeliveryMen, saveDeliveryMan } from "@/lib/deliveries";
 import {
   HELD_CHANNEL_LABELS,
@@ -1104,6 +1105,8 @@ function POSPage() {
           <UserPlus className="h-4 w-4" />
         </Button>
       </div>
+
+      {ownerId && <DeliveryRiskBadge phone={owners.find((o) => o.id === ownerId)?.phone} />}
 
       {resumedBill && (
         <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">

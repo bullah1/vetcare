@@ -1,10 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Bike, Download, FileText, MessageCircle, PackageCheck, Search, Truck } from "lucide-react";
+import { AlertTriangle, Bike, Download, FileText, MessageCircle, PackageCheck, RefreshCw, RotateCcw, Search, Truck } from "lucide-react";
+import { ReturnFlow } from "@/components/ReturnFlow";
+import { refreshAllCourierStatuses } from "@/lib/courier.functions";
+import { courierStage, localStage } from "@/lib/courier-status";
 import { supabase } from "@/integrations/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent } from "@/components/ui/card";
@@ -63,6 +67,8 @@ type Shipment = {
   codCharge: number;
   /** What the rider / courier collects from the customer. */
   collect: number;
+  /** Goods already taken back in POS (sale refunded / partly refunded / cancelled). */
+  returnedInPos: boolean;
 };
 
 const STAGE_LABEL: Record<Stage, string> = { delivered: "Delivered", progress: "In progress", cancelled: "Cancelled / Returned" };
@@ -71,8 +77,6 @@ const STAGE_TONE: Record<Stage, string> = {
   progress: "border-amber-300 bg-amber-50 text-amber-800",
   cancelled: "border-destructive/40 bg-destructive/10 text-destructive",
 };
-const COURIER_DONE = new Set(["delivered", "partial_delivered"]);
-const COURIER_CANCEL = new Set(["cancelled", "returned", "return", "partial_returned"]);
 const human = (s: string) => s.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
 const num = (v: unknown) => Number(v) || 0;
 
@@ -95,11 +99,13 @@ async function loadShipments(from: string, to: string): Promise<Shipment[]> {
     ),
   ]);
 
-  // Rider collects the unpaid product amount + the delivery charge.
-  const sales = await fetchAllIn<{ id: string; total: number; due: number }>(
-    locals.map((d) => d.sale_id),
-    (ids) => db.from("sales").select("id,total,due").in("id", ids).order("id"),
+  // Rider collects the unpaid product amount + the delivery charge; the sale
+  // status shows whether returned parcels were taken back in POS.
+  const sales = await fetchAllIn<{ id: string; total: number; due: number; status: string }>(
+    [...locals.map((d) => d.sale_id), ...couriers.map((c: any) => c.sale_id)],
+    (ids) => db.from("sales").select("id,total,due,status").in("id", ids).order("id"),
   );
+  const RETURNED = new Set(["refunded", "partial_refund", "void"]);
   const saleById = new Map(sales.map((s) => [s.id, s]));
 
   const out: Shipment[] = [];
@@ -122,11 +128,12 @@ async function loadShipments(from: string, to: string): Promise<Shipment[]> {
       tracking: null,
       status: d.status,
       statusLabel: DELIVERY_STATUS_LABEL[d.status] ?? human(d.status),
-      stage: d.status === "delivered" ? "delivered" : d.status === "cancelled" ? "cancelled" : "progress",
+      stage: localStage(d.status),
       productValue: num(s?.total),
       charge,
       codCharge: 0,
       collect: num(s?.due) + charge,
+      returnedInPos: RETURNED.has(String(s?.status)),
     });
   }
   for (const c of couriers) {
@@ -151,11 +158,12 @@ async function loadShipments(from: string, to: string): Promise<Shipment[]> {
       tracking: c.tracking_code ?? c.consignment_id ?? null,
       status: st,
       statusLabel: human(st),
-      stage: COURIER_DONE.has(st) ? "delivered" : COURIER_CANCEL.has(st) ? "cancelled" : "progress",
+      stage: courierStage(st),
       productValue: sales,
       charge,
       codCharge: c.paid_by === "shop" ? 0 : Math.max(0, cod - sales - charge),
       collect: cod,
+      returnedInPos: RETURNED.has(String(saleById.get(c.sale_id)?.status)),
     });
   }
   return out.sort((a, b) => (a.at < b.at ? 1 : -1));
@@ -220,6 +228,45 @@ function DeliveryReportPage() {
     queryKey: ["delivery-report", from, to],
     queryFn: () => loadShipments(from, to),
   });
+
+  // Latest courier status from Steadfast (cancelled / delivered show up here).
+  const qc = useQueryClient();
+  const refreshFn = useServerFn(refreshAllCourierStatuses);
+  const [syncing, setSyncing] = useState(false);
+  const syncCourier = async (silent = false) => {
+    setSyncing(true);
+    try {
+      const res: any = await refreshFn({ data: {} });
+      try { localStorage.setItem("deliveryReport.lastSync", String(Date.now())); } catch { /* ignore */ }
+      if (!res.ok) { if (!silent) toast.error(res.message); return; }
+      if (res.changed.length) {
+        const cancelled = res.changed.filter((c: any) => courierStage(c.to) === "cancelled");
+        toast.success(`${res.changed.length} parcel status updated${cancelled.length ? ` — ${cancelled.length} cancelled: ${cancelled.map((c: any) => c.invoice_no).join(", ")}` : ""}`);
+        qc.invalidateQueries({ queryKey: ["delivery-report"] });
+        qc.invalidateQueries({ queryKey: ["delivery-record"] });
+      } else if (!silent) {
+        toast.success(`All ${res.checked} parcels on the way are up to date`);
+      }
+      if (res.failed && !silent) toast.warning(`${res.failed} parcel(s) could not be checked`);
+    } catch (e: any) {
+      if (!silent) toast.error(e?.message ?? "Could not reach Steadfast");
+    } finally {
+      setSyncing(false);
+    }
+  };
+  // Check by itself when the page opens (at most every 15 minutes).
+  const autoSynced = useRef(false);
+  useEffect(() => {
+    if (autoSynced.current) return;
+    autoSynced.current = true;
+    let last = 0;
+    try { last = Number(localStorage.getItem("deliveryReport.lastSync")) || 0; } catch { /* ignore */ }
+    if (Date.now() - last > 15 * 60_000) void syncCourier(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Parcels that came back but whose goods were not taken back in POS yet.
+  const notReturned = useMemo(() => all.filter((s) => s.stage === "cancelled" && !s.returnedInPos), [all]);
 
   const agents = useMemo(() => {
     const m = new Map<string, { key: string; name: string; kind: Kind }>();
@@ -314,9 +361,14 @@ function DeliveryReportPage() {
         description="Courier parcels and local deliveries together — what went out, what reached, and what is still to collect."
         icon={PackageCheck}
         actions={
-          <Button variant="outline" disabled={!rows.length} onClick={() => downloadCsv(rows, from, to)}>
-            <Download className="h-4 w-4" /> Export CSV
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" disabled={syncing} onClick={() => syncCourier(false)} title="Get the latest status of every courier parcel from Steadfast">
+              <RefreshCw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} /> {syncing ? "Updating…" : "Update courier status"}
+            </Button>
+            <Button variant="outline" disabled={!rows.length} onClick={() => downloadCsv(rows, from, to)}>
+              <Download className="h-4 w-4" /> Export CSV
+            </Button>
+          </div>
         }
       />
 
@@ -368,6 +420,34 @@ function DeliveryReportPage() {
       </Card>
 
       {error && <p className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">Could not load the report: {(error as any)?.message}</p>}
+
+      {notReturned.length > 0 && (
+        <Card className="mb-4 border-destructive/40">
+          <CardContent className="p-3 sm:p-4">
+            <div className="mb-2 flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <div>
+                <p className="text-sm font-medium">{notReturned.length} cancelled parcel{notReturned.length === 1 ? "" : "s"} not returned in POS yet</p>
+                <p className="text-xs text-muted-foreground">The sale and stock stay as they are until you return the goods. When the parcel is back in the shop, press Return.</p>
+              </div>
+            </div>
+            <div className="divide-y rounded-md border">
+              {notReturned.map((s) => (
+                <div key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm">
+                  <span className="font-medium">{s.invoiceNo}</span>
+                  <KindBadge kind={s.kind} />
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">{s.customer}{s.phone ? ` · ${s.phone}` : ""} · {s.agent} · {s.statusLabel}</span>
+                  <span className="tabular-nums">{fmt(s.productValue)}</span>
+                  <ReturnFlow
+                    invoiceNo={s.invoiceNo}
+                    trigger={<Button size="sm" variant="outline"><RotateCcw className="h-3.5 w-3.5" /> Return</Button>}
+                  />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Headline numbers */}
       <div className="mb-4 grid grid-cols-2 gap-2.5 md:grid-cols-4">

@@ -38,6 +38,7 @@ import { Route as AuthenticatedReportsRouteImport } from './routes/_authenticate
 import { Route as AuthenticatedSalesHistoryRouteImport } from './routes/_authenticated/sales-history'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
 import { Route as AuthenticatedStaffRouteImport } from './routes/_authenticated/staff'
+import { Route as ApiSteadfastWebhookRouteImport } from './routes/api/steadfast-webhook'
 import { Route as AuthenticatedCustomersIdRouteImport } from './routes/_authenticated/customers.$id'
 
 const IndexRoute = IndexRouteImport.update({
@@ -196,6 +197,11 @@ const AuthenticatedStaffRoute = AuthenticatedStaffRouteImport.update({
   path: '/staff',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const ApiSteadfastWebhookRoute = ApiSteadfastWebhookRouteImport.update({
+  id: '/api/steadfast-webhook',
+  path: '/api/steadfast-webhook',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthenticatedCustomersIdRoute =
   AuthenticatedCustomersIdRouteImport.update({
     id: '/customers/$id',
@@ -232,6 +238,7 @@ export interface FileRoutesByFullPath {
   '/sales-history': typeof AuthenticatedSalesHistoryRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/staff': typeof AuthenticatedStaffRoute
+  '/api/steadfast-webhook': typeof ApiSteadfastWebhookRoute
   '/customers/$id': typeof AuthenticatedCustomersIdRoute
 }
 export interface FileRoutesByTo {
@@ -263,6 +270,7 @@ export interface FileRoutesByTo {
   '/sales-history': typeof AuthenticatedSalesHistoryRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/staff': typeof AuthenticatedStaffRoute
+  '/api/steadfast-webhook': typeof ApiSteadfastWebhookRoute
   '/customers/$id': typeof AuthenticatedCustomersIdRoute
 }
 export interface FileRoutesById {
@@ -296,6 +304,7 @@ export interface FileRoutesById {
   '/_authenticated/sales-history': typeof AuthenticatedSalesHistoryRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/_authenticated/staff': typeof AuthenticatedStaffRoute
+  '/api/steadfast-webhook': typeof ApiSteadfastWebhookRoute
   '/_authenticated/customers/$id': typeof AuthenticatedCustomersIdRoute
 }
 export interface FileRouteTypes {
@@ -329,6 +338,7 @@ export interface FileRouteTypes {
     | '/sales-history'
     | '/settings'
     | '/staff'
+    | '/api/steadfast-webhook'
     | '/customers/$id'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -360,6 +370,7 @@ export interface FileRouteTypes {
     | '/sales-history'
     | '/settings'
     | '/staff'
+    | '/api/steadfast-webhook'
     | '/customers/$id'
   id:
     | '__root__'
@@ -392,6 +403,7 @@ export interface FileRouteTypes {
     | '/_authenticated/sales-history'
     | '/_authenticated/settings'
     | '/_authenticated/staff'
+    | '/api/steadfast-webhook'
     | '/_authenticated/customers/$id'
   fileRoutesById: FileRoutesById
 }
@@ -399,6 +411,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   AuthRoute: typeof AuthRoute
+  ApiSteadfastWebhookRoute: typeof ApiSteadfastWebhookRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -606,6 +619,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedStaffRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/api/steadfast-webhook': {
+      id: '/api/steadfast-webhook'
+      path: '/api/steadfast-webhook'
+      fullPath: '/api/steadfast-webhook'
+      preLoaderRoute: typeof ApiSteadfastWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_authenticated/customers/$id': {
       id: '/_authenticated/customers/$id'
       path: '/customers/$id'
@@ -684,6 +704,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   AuthRoute: AuthRoute,
+  ApiSteadfastWebhookRoute: ApiSteadfastWebhookRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

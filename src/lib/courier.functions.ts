@@ -202,3 +202,55 @@ export const refreshCourierStatus = createServerFn({ method: "POST" })
       return { ok: false as const, message: e?.message ?? "Network error" };
     }
   });
+
+/**
+ * Asks Steadfast for the latest status of every parcel that is still on the
+ * way (up to 150 at a time) and saves any change. Only courier_orders rows
+ * change — the sale, stock and payments are never touched.
+ */
+export const refreshAllCourierStatuses = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: { limit?: number } | undefined) => input ?? {})
+  .handler(async ({ data, context }) => {
+    const { supabase } = context;
+    const apiKey = process.env["STEADFAST_API_KEY"];
+    const secretKey = process.env["STEADFAST_SECRET_KEY"];
+    if (!apiKey || !secretKey) return { ok: false as const, message: "Steadfast API credentials are not configured." };
+
+    const { data: orders, error } = await supabase
+      .from("courier_orders")
+      .select("id,invoice_no,consignment_id,status")
+      .eq("courier", "steadfast")
+      .not("consignment_id", "is", null)
+      .not("status", "in", "(delivered,partial_delivered,cancelled,failed)")
+      .order("created_at", { ascending: true })
+      .limit(Math.min(150, Math.max(1, Number(data.limit) || 150)));
+    if (error) throw new Error(error.message);
+
+    const list = orders ?? [];
+    const changed: { invoice_no: string; from: string; to: string }[] = [];
+    let failed = 0;
+    // A few at a time so the courier API is not flooded.
+    for (let i = 0; i < list.length; i += 5) {
+      await Promise.all(
+        list.slice(i, i + 5).map(async (o) => {
+          try {
+            const res = await fetch(`https://portal.packzy.com/api/v1/status_by_cid/${o.consignment_id}`, {
+              headers: { "Api-Key": apiKey, "Secret-Key": secretKey, Accept: "application/json" },
+            });
+            const json: any = await res.json().catch(() => null);
+            const status = json?.delivery_status ? String(json.delivery_status) : null;
+            if (!res.ok || !status) { failed += 1; return; }
+            if (status !== o.status) {
+              const { error: uErr } = await supabase.from("courier_orders").update({ status }).eq("id", o.id);
+              if (uErr) { failed += 1; return; }
+              changed.push({ invoice_no: o.invoice_no ?? "", from: o.status, to: status });
+            }
+          } catch {
+            failed += 1;
+          }
+        }),
+      );
+    }
+    return { ok: true as const, checked: list.length, changed, failed };
+  });

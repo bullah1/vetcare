@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { ArrowLeft, CalendarClock, HandCoins, Mail, MapPin, Pencil, Phone, Repeat, RotateCcw, User, Wallet } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
+import { DeliveryRiskBadge } from "@/lib/customer-risk";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -206,6 +207,7 @@ function CustomerDetailPage() {
             <div className="flex items-center gap-2"><span className="text-muted-foreground">Gender:</span> <span className="capitalize">{owner.gender || "—"}</span></div>
             <div className="flex items-center gap-2"><Mail className="h-4 w-4 text-muted-foreground" /> {owner.email || "—"}</div>
             <div className="flex items-center gap-2"><MapPin className="h-4 w-4 text-muted-foreground" /> {owner.address || "—"}</div>
+            <DeliveryRiskBadge phone={owner.phone} />
             {owner.notes && <div className="text-xs text-muted-foreground pt-1">{owner.notes}</div>}
             <div className="flex flex-wrap gap-1 pt-2">
               {(data?.pets ?? []).map((p) => (

@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Bike, Plus } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { DeliveryRiskBadge } from "@/lib/customer-risk";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -175,6 +176,8 @@ export function DeliveryDialog({
                   ))}
               </ul>
             </div>
+
+            <DeliveryRiskBadge phone={sale?.owner?.phone} />
 
             <div className="space-y-2">
               <div className="flex items-center justify-between">

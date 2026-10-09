@@ -8,6 +8,7 @@ import { sendCourierOrder, refreshCourierStatus } from "@/lib/courier.functions"
 import { printCourierLabel, type CourierLabelData } from "@/lib/courier-label";
 import { printInvoice, shareInvoiceOnWhatsApp, courierTrackingUrl } from "@/lib/invoice-print";
 import { fetchSaleReceipt } from "@/lib/sale-receipt";
+import { DeliveryRiskBadge } from "@/lib/customer-risk";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -241,6 +242,7 @@ export function CourierDialog({ saleId, onClose, onSaved }: Props) {
                 <Label className="text-xs">Phone (11 digits)</Label>
                 <Input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="numeric" className="h-10" />
               </div>
+              <DeliveryRiskBadge phone={phone} className="sm:col-span-2" />
               <div className="sm:col-span-2">
                 <Label className="text-xs">Delivery address</Label>
                 <Textarea value={address} onChange={(e) => setAddress(e.target.value)} rows={2} />
