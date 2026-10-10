@@ -97,6 +97,12 @@ export async function loadPeriod({ from, to }: Period) {
   // Old cancelled / refunded invoices without any reversal row are "dead".
   const reversedCandidates = sales.filter((s: any) => s.status === "void" || s.status === "refunded").map((s: any) => s.id);
   const anyReturn = await fetchAllIn<{ sale_id: string }>(reversedCandidates, (ids) => db.from("sale_returns").select("sale_id").in("sale_id", ids).order("id"));
+  // For a cancellation, the value reversed is the invoice total minus any
+  // earlier partial returns (older cancel rows stored only the cash part).
+  const cancelledSaleIds = [...new Set(returns.filter((r: any) => r.return_type === "cancel").map((r: any) => r.sale_id))];
+  const cancelledSaleReturns = await fetchAllIn<{ sale_id: string; return_type: string; refund_amount: number }>(cancelledSaleIds, (ids) => db.from("sale_returns").select("sale_id,return_type,refund_amount").in("sale_id", ids).order("id"));
+  const partialBySale = new Map<string, number>();
+  for (const r of cancelledSaleReturns) if (r.return_type !== "cancel") partialBySale.set(r.sale_id, (partialBySale.get(r.sale_id) ?? 0) + n(r.refund_amount));
   // Which invoices are consultation (clinic) invoices — sales in range AND returned sales from earlier.
   const saleIds = [...new Set([...sales.map((s: any) => s.id), ...returns.map((r: any) => r.sale_id)])];
   const clinicLinks = await fetchAllIn<{ sale_id: string }>(saleIds, (ids) => db.from("appointments").select("sale_id").in("sale_id", ids).order("id"));
@@ -108,6 +114,7 @@ export async function loadPeriod({ from, to }: Period) {
     prescriptions: prescriptions.count ?? 0,
     flows: (flows.data ?? []) as { method: string; inflow: number; outflow: number; balance: number }[],
     reversedIds: new Set(anyReturn.map((r) => r.sale_id)),
+    partialBySale,
     clinicSaleIds: new Set(clinicLinks.map((r) => r.sale_id)),
   };
 }
@@ -177,15 +184,16 @@ export function computePeriod(d: PeriodData) {
     const sale = r.sales;
     const raisedInRange = sale?.created_at ? sale.created_at >= fromISO : false;
     if (raisedInRange && !liveIds.has(r.sale_id)) continue; // never counted in the first place
+    const cancel = r.return_type === "cancel";
     let value = n(r.refund_amount);
-    if (sale?.status === "void" || sale?.status === "refunded") {
+    if (cancel) {
+      // Whole remaining invoice value, once per invoice.
       if (seen.has(r.sale_id)) value = 0;
-      else { seen.add(r.sale_id); value = grossOf(sale); }
+      else { seen.add(r.sale_id); value = Math.max(value, grossOf(sale) - (d.partialBySale.get(r.sale_id) ?? 0), 0); }
     }
     reversals += value;
     if (isClinic(r.sale_id)) clinicReversals += value;
     dayRow(r.created_at).reversals += value;
-    const cancel = r.return_type === "cancel" || sale?.status === "void";
     if (cancel) cancelCount += 1; else returnCount += 1;
     let goods = 0, cost = 0;
     for (const it of r.sale_return_items ?? []) {
@@ -395,8 +403,8 @@ export function computeSnapshot(s: Snapshot) {
   const lowRows: any[] = [];
   const catMap = new Map<string, { category: string; products: number; units: number; value: number; retail: number }>();
   for (const p of s.products) {
-    if (p.is_active === false) continue;
     const q = n(p.stock_quantity);
+    if (p.is_active === false && q <= 0) continue; // hidden product without stock
     const qPos = Math.max(0, q); // negative stock is a data problem, never negative value
     const v = qPos * n(p.purchase_price);
     stockValue += v; retailValue += qPos * n(p.selling_price); units += qPos;
