@@ -23,6 +23,7 @@ import {
   LineChart,
   HeartPulse,
   Brain,
+  ReceiptText,
 } from "lucide-react";
 import {
   Sidebar,
@@ -45,6 +46,7 @@ const ICONS: Record<string, typeof Users> = {
   clinic_dashboard: HeartPulse,
   clinical_intelligence: Brain,
   appointments: CalendarDays,
+  clinic_bill: ReceiptText,
   appointment_history: History,
   pets: PawPrint,
   clinical_visit: Stethoscope,
@@ -77,7 +79,7 @@ export function AppSidebar() {
 
   const visibleGroups = GROUP_ORDER.map((label) => ({
     label,
-    items: MODULES.filter((m) => m.group === label && can(m.key)),
+    items: MODULES.filter((m) => m.group === label && !m.hidden && can(m.key)),
   })).filter((g) => g.items.length > 0);
 
   return (

@@ -106,6 +106,9 @@ export async function loadPeriod({ from, to }: Period) {
   // Which invoices are consultation (clinic) invoices — sales in range AND returned sales from earlier.
   const saleIds = [...new Set([...sales.map((s: any) => s.id), ...returns.map((r: any) => r.sale_id)])];
   const clinicLinks = await fetchAllIn<{ sale_id: string }>(saleIds, (ids) => db.from("appointments").select("sale_id").in("sale_id", ids).order("id"));
+  // Service bills (Clinic → Service Bill) are marked on the sale itself. Older databases
+  // without the column simply skip this.
+  const clinicSources = await fetchAllIn<{ id: string }>(saleIds, (ids) => db.from("sales").select("id").eq("source", "clinic").in("id", ids).order("id")).catch(() => []);
 
   return {
     period: { from, to },
@@ -115,7 +118,7 @@ export async function loadPeriod({ from, to }: Period) {
     flows: (flows.data ?? []) as { method: string; inflow: number; outflow: number; balance: number }[],
     reversedIds: new Set(anyReturn.map((r) => r.sale_id)),
     partialBySale,
-    clinicSaleIds: new Set(clinicLinks.map((r) => r.sale_id)),
+    clinicSaleIds: new Set([...clinicLinks.map((r) => r.sale_id), ...clinicSources.map((r) => r.id)]),
   };
 }
 
@@ -225,7 +228,7 @@ export function computePeriod(d: PeriodData) {
     const factor = sub > 0 ? Math.max(0, Math.min(1, grossOf(s) / sub)) : 1; // spread invoice discount
     const rev = q > 0 ? n(it.line_total) * (netQ / q) * factor : 0;
     const key = it.product_id ?? `svc:${it.name}`;
-    const p = products.get(key) ?? { key, name: it.name, category: it.product_id ? catLabel(it.products?.category) : isClinic(it.sale_id) ? "Consultation" : "Service", qty: 0, revenue: 0, cost: 0 };
+    const p = products.get(key) ?? { key, name: it.name, category: it.product_id ? catLabel(it.products?.category) : isClinic(it.sale_id) ? "Clinic service" : "Service", qty: 0, revenue: 0, cost: 0 };
     p.qty += netQ;
     p.revenue += rev;
     p.cost += netQ * unitCost(it);

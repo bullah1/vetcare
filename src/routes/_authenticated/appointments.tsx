@@ -11,13 +11,13 @@ function slipFrom(a: any): AppointmentSlip {
     owner_phone: a.pet?.owner?.phone ?? a.guest_phone ?? null,
     doctor_name: a.doctor?.full_name ?? "—",
     fee: Number(a.fee || 0),
-    paid: Number(a.paid || 0),
+    paid: Number(a.sale?.paid ?? a.paid ?? 0),
     reason: a.reason ?? null,
   };
 }
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, Plus, Wallet, Ban, CheckCircle2, Eye, PawPrint, Stethoscope, Printer, History } from "lucide-react";
+import { CalendarDays, Plus, Receipt, Ban, CheckCircle2, Eye, PawPrint, Stethoscope, Printer, BarChart3, Wallet } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent } from "@/components/ui/card";
@@ -32,7 +32,9 @@ import { toast } from "sonner";
 import { AddPetDialog } from "@/components/AddPetDialog";
 import { CustomerPicker, useOwnerOptions } from "@/components/CustomerPetPicker";
 import { AddDoctorDialog } from "@/components/AddDoctorDialog";
-import { ReceiveAppointmentCashDialog, money, type ApptForPayment } from "@/components/ReceiveAppointmentCashDialog";
+import { money } from "@/components/ReceiveAppointmentCashDialog";
+import { ProblemPicker } from "@/components/ProblemPicker";
+import { APPT_STATUS, apptStatus } from "@/lib/clinic";
 import { PetHistorySheet } from "@/components/PetHistorySheet";
 import { printAppointmentSlip, type AppointmentSlip } from "@/lib/appointment-slip";
 import { dayRangeISO } from "@/lib/sales-ledger";
@@ -51,9 +53,19 @@ export const Route = createFileRoute("/_authenticated/appointments")({
   component: AppointmentsPage,
 });
 
-const STATUSES = ["pending", "confirmed", "in_progress", "completed", "cancelled", "no_show"] as const;
-const STATUS_COLORS: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
-  pending: "outline", confirmed: "default", in_progress: "secondary", completed: "secondary", cancelled: "destructive", no_show: "destructive",
+/** Money on an appointment comes only from its bill. No bill = nothing collected and nothing due. */
+const billOf = (a: any) => {
+  const s = a.sale;
+  if (!s) return null;
+  const cancelled = s.status === "void" || s.status === "refunded";
+  return {
+    id: s.id as string,
+    invoice_no: s.invoice_no as string,
+    cancelled,
+    total: cancelled ? 0 : Number(s.total || 0),
+    paid: cancelled ? 0 : Number(s.paid || 0),
+    due: cancelled ? 0 : Math.max(Number(s.due || 0), 0),
+  };
 };
 
 const todayStr = () => {
@@ -61,7 +73,7 @@ const todayStr = () => {
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 };
 
-const emptyForm = { owner_id: "", pet_id: "", doctor_id: "", scheduled_at: "", duration_minutes: 30, fee: "", discount: "", reason: "", notes: "", serial_no: "" };
+const emptyForm = { owner_id: "", pet_id: "", doctor_id: "", scheduled_at: "", duration_minutes: 30, fee: "", discount: "", problem_id: "", reason: "", notes: "", serial_no: "" };
 
 function AppointmentsPage() {
   const qc = useQueryClient();
@@ -70,7 +82,6 @@ function AppointmentsPage() {
   const [form, setForm] = useState({ ...emptyForm });
   const [addPet, setAddPet] = useState(false);
   const [addDoctor, setAddDoctor] = useState(false);
-  const [payFor, setPayFor] = useState<ApptForPayment | null>(null);
   const [historyPet, setHistoryPet] = useState<string | null>(null);
   const [viewing, setViewing] = useState<any | null>(null);
 
@@ -90,7 +101,7 @@ function AppointmentsPage() {
       const { fromISO: start, toISO: end } = dayRangeISO(day, day);
       const { data, error } = await supabase
         .from("appointments")
-        .select("*, pet:pets(id,name,species,owner:pet_owners(full_name,phone)), doctor:doctors(full_name)")
+        .select("*, pet:pets(id,name,species,owner:pet_owners(full_name,phone)), doctor:doctors(full_name), sale:sales!appointments_sale_id_fkey(id,invoice_no,total,paid,due,status)" as any)
         .gte("scheduled_at", start)
         .lte("scheduled_at", end)
         .order("serial_no", { ascending: true })
@@ -115,18 +126,20 @@ function AppointmentsPage() {
   });
 
   const summary = useMemo(() => {
-    const s = { total: appts.length, waiting: 0, consulting: 0, completed: 0, cancelled: 0, no_show: 0, fee: 0, collected: 0, due: 0 };
+    const s = { total: appts.length, booked: 0, arrived: 0, completed: 0, cancelled: 0, no_show: 0, unbilled: 0, billed: 0, collected: 0, due: 0 };
     for (const a of appts as any[]) {
-      if (a.status === "pending" || a.status === "confirmed") s.waiting++;
-      if (a.status === "in_progress") s.consulting++;
-      if (a.status === "completed") s.completed++;
-      if (a.status === "cancelled") s.cancelled++;
-      if (a.status === "no_show") s.no_show++;
-      if (a.status !== "cancelled") {
-        s.fee += Number(a.fee || 0);
-        s.collected += Number(a.paid || 0);
-        s.due += Math.max(Number(a.fee || 0) - Number(a.paid || 0), 0);
-      }
+      const st = apptStatus(a.status).value;
+      if (st === "pending") s.booked++;
+      if (st === "in_progress") s.arrived++;
+      if (st === "completed") s.completed++;
+      if (st === "cancelled") s.cancelled++;
+      if (st === "no_show") s.no_show++;
+      const bill = billOf(a);
+      if (bill) {
+        s.billed += bill.total;
+        s.collected += bill.paid;
+        s.due += bill.due;
+      } else if (st !== "cancelled" && st !== "no_show") s.unbilled++;
     }
     return s;
   }, [appts]);
@@ -154,9 +167,12 @@ function AppointmentsPage() {
       });
       if (error) throw error;
       const apptId = (data as any)?.appointment_id;
-      if (discount > 0 && apptId) {
-        const { error: dErr } = await supabase.from("appointments").update({ discount } as any).eq("id", apptId);
-        if (dErr) toast.error(`Appointment saved, but the discount note failed: ${dErr.message}`);
+      if (apptId && (discount > 0 || form.problem_id)) {
+        const extra: any = {};
+        if (discount > 0) extra.discount = discount;
+        if (form.problem_id) extra.problem_id = form.problem_id;
+        const { error: dErr } = await supabase.from("appointments").update(extra).eq("id", apptId);
+        if (dErr) toast.error(`Appointment saved, but the problem/discount was not saved: ${dErr.message}`);
       }
       return data as any;
     },
@@ -215,26 +231,18 @@ function AppointmentsPage() {
     setForm((f) => ({ ...f, doctor_id: v, fee: f.fee || (doc?.consultation_fee ? String(doc.consultation_fee) : "") }));
   };
 
-  const toPayment = (a: any): ApptForPayment => ({
-    id: a.id,
-    serial_no: a.serial_no,
-    fee: Number(a.fee || 0),
-    paid: Number(a.paid || 0),
-    pet_name: a.pet?.name ?? a.guest_pet_name,
-    owner_name: a.pet?.owner?.full_name ?? a.guest_name,
-  });
 
   return (
     <div>
       <PageHeader
         title="Appointments"
-        description="Add pet → select doctor → auto serial → consultation → receive cash → auto sales entry."
+        description="Book a visit, then make the bill when the pet is seen. A booking alone is not a sale."
         icon={CalendarDays}
         actions={
           <>
             <Input type="date" value={day} onChange={(e) => setDay(e.target.value)} className="h-9 w-full sm:w-auto" />
             <Button asChild variant="outline">
-              <Link to="/appointment-history"><History className="h-4 w-4" /> History</Link>
+              <Link to="/clinic-dashboard"><BarChart3 className="h-4 w-4" /> Dashboard</Link>
             </Button>
             <Button onClick={() => { setForm({ ...emptyForm, scheduled_at: `${day}T10:00` }); setOpen(true); }}>
               <Plus className="h-4 w-4" /> New
@@ -246,16 +254,16 @@ function AppointmentsPage() {
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8 mb-4">
         {[
           { label: "Total", value: summary.total },
-          { label: "Waiting", value: summary.waiting },
-          { label: "In consult", value: summary.consulting },
+          { label: "Booked", value: summary.booked },
+          { label: "Arrived", value: summary.arrived },
           { label: "Completed", value: summary.completed },
-          { label: "Cancelled", value: summary.cancelled },
-          { label: "No show", value: summary.no_show },
+          { label: "Cancelled / No-show", value: `${summary.cancelled} / ${summary.no_show}` },
+          { label: "Not billed yet", value: summary.unbilled },
           { label: "Collected", value: money(summary.collected) },
-          { label: "Due", value: money(summary.due) },
+          { label: "Due on bills", value: money(summary.due) },
         ].map((c) => (
           <Card key={c.label}>
-            <CardContent className="p-3">
+            <CardContent className="p-3 sm:p-3">
               <div className="text-xs text-muted-foreground">{c.label}</div>
               <div className="text-lg font-semibold tabular-nums truncate">{c.value}</div>
             </CardContent>
@@ -271,7 +279,9 @@ function AppointmentsPage() {
         )}
 
         {(appts as any[]).map((a) => {
-          const due = Math.max(Number(a.fee || 0) - Number(a.paid || 0), 0);
+          const bill = billOf(a);
+          const st = apptStatus(a.status);
+          const closed = st.value === "cancelled" || st.value === "no_show";
           return (
             <Card key={a.id}>
               <CardContent className="p-3 sm:p-4 space-y-3">
@@ -293,34 +303,48 @@ function AppointmentsPage() {
                         {a.pet?.name ?? a.guest_pet_name ?? "—"}
                       </button>
                       {a.pet?.species && <Badge variant="outline">{a.pet.species}</Badge>}
-                      <Badge variant={STATUS_COLORS[a.status] ?? "outline"}>{a.status}</Badge>
-                      {Number(a.fee || 0) > 0 && (
-                        <Badge variant={due > 0 ? "destructive" : "secondary"}>
-                          {due > 0 ? `Due ${money(due)}` : "Paid"}
+                      <Badge variant="outline" className={st.tone}>{st.label}</Badge>
+                      {bill ? (
+                        <Badge variant={bill.due > 0 ? "destructive" : "secondary"}>
+                          {bill.cancelled ? `Bill ${bill.invoice_no} cancelled` : bill.due > 0 ? `Bill ${bill.invoice_no} · Due ${money(bill.due)}` : `Paid · ${bill.invoice_no}`}
                         </Badge>
-                      )}
+                      ) : !closed ? (
+                        <Badge variant="outline">Not billed</Badge>
+                      ) : null}
                     </div>
                     <div className="text-xs text-muted-foreground mt-1 truncate">
                       {a.pet?.owner?.full_name ?? a.guest_name ?? "—"}
                       {(a.pet?.owner?.phone || a.guest_phone) && ` · ${a.pet?.owner?.phone ?? a.guest_phone}`}
                       {a.doctor?.full_name && ` · Dr. ${a.doctor.full_name}`}
-                      {` · Fee ${money(Number(a.fee || 0))} · Paid ${money(Number(a.paid || 0))}`}
+                      {bill ? ` · Bill ${money(bill.total)} · Paid ${money(bill.paid)}` : ` · Fee ${money(Number(a.fee || 0))}`}
                     </div>
                     {a.reason && <p className="text-sm mt-1">{a.reason}</p>}
                   </div>
 
-                  <Select value={a.status} onValueChange={(v) => updateStatus.mutate({ id: a.id, status: v })}>
+                  <Select value={st.value} onValueChange={(v) => updateStatus.mutate({ id: a.id, status: v })}>
                     <SelectTrigger className="w-full sm:w-36"><SelectValue /></SelectTrigger>
-                    <SelectContent>{STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                    <SelectContent>{APPT_STATUS.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
                   <Button size="sm" variant="outline" onClick={() => setViewing(a)}><Eye className="h-4 w-4" /> View</Button>
-                  <Button size="sm" onClick={() => setPayFor(toPayment(a))} disabled={due <= 0 || a.status === "cancelled"}>
-                    <Wallet className="h-4 w-4" /> Receive cash
-                  </Button>
-                  {a.status !== "completed" && (
+                  {!bill && !closed && (
+                    <Button size="sm" asChild>
+                      <Link to="/clinic-bill" search={{ appointment: a.id }}><Receipt className="h-4 w-4" /> Make bill</Link>
+                    </Button>
+                  )}
+                  {bill && bill.due > 0 && (
+                    <Button size="sm" asChild>
+                      <Link to="/due-bills"><Wallet className="h-4 w-4" /> Collect due</Link>
+                    </Button>
+                  )}
+                  {st.value === "pending" && (
+                    <Button size="sm" variant="outline" onClick={() => updateStatus.mutate({ id: a.id, status: "in_progress" })}>
+                      Arrived
+                    </Button>
+                  )}
+                  {bill && st.value !== "completed" && (
                     <Button size="sm" variant="outline" onClick={() => updateStatus.mutate({ id: a.id, status: "completed" })}>
                       <CheckCircle2 className="h-4 w-4" /> Complete
                     </Button>
@@ -432,7 +456,10 @@ function AppointmentsPage() {
               </div>
             </div>
 
-            <div className="space-y-2"><Label>Reason</Label><Input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></div>
+            <div className="space-y-2">
+              <Label>Problem</Label>
+              <ProblemPicker value={form.problem_id} onChange={(id, name) => setForm((f) => ({ ...f, problem_id: id, reason: name }))} />
+            </div>
             <div className="space-y-2"><Label>Notes</Label><Textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
           </div>
           <DialogFooter>
@@ -455,10 +482,18 @@ function AppointmentsPage() {
               <Row label="Doctor" value={viewing.doctor?.full_name ? `Dr. ${viewing.doctor.full_name}` : "—"} />
               <Row label="When" value={new Date(viewing.scheduled_at).toLocaleString()} />
               <Row label="Duration" value={`${viewing.duration_minutes} min`} />
-              <Row label="Status" value={viewing.status} />
+              <Row label="Status" value={apptStatus(viewing.status).label} />
               <Row label="Fee" value={money(Number(viewing.fee || 0))} />
-              <Row label="Paid" value={money(Number(viewing.paid || 0))} />
-              <Row label="Due" value={money(Math.max(Number(viewing.fee || 0) - Number(viewing.paid || 0), 0))} />
+              {billOf(viewing) ? (
+                <>
+                  <Row label="Bill" value={billOf(viewing)!.invoice_no} />
+                  <Row label="Bill total" value={money(billOf(viewing)!.total)} />
+                  <Row label="Paid" value={money(billOf(viewing)!.paid)} />
+                  <Row label="Due" value={money(billOf(viewing)!.due)} />
+                </>
+              ) : (
+                <Row label="Bill" value="Not billed yet" />
+              )}
               {viewing.reason && <Row label="Reason" value={viewing.reason} />}
               {viewing.notes && <Row label="Notes" value={viewing.notes} />}
             </div>
@@ -480,7 +515,6 @@ function AppointmentsPage() {
         onCreated={(id) => setForm((f) => ({ ...f, pet_id: id }))}
       />
       <AddDoctorDialog open={addDoctor} onOpenChange={setAddDoctor} onCreated={(id) => pickDoctor(id)} />
-      <ReceiveAppointmentCashDialog appointment={payFor} onClose={() => setPayFor(null)} />
       <PetHistorySheet petId={historyPet} onClose={() => setHistoryPet(null)} />
     </div>
   );

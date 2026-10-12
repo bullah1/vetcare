@@ -23,6 +23,7 @@ import {
   Bike,
   PackageCheck,
   LineChart,
+  ReceiptText,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,7 @@ import { cn } from "@/lib/utils";
 const ICONS: Record<string, typeof Users> = {
   dashboard: LayoutDashboard,
   appointments: CalendarDays,
+  clinic_bill: ReceiptText,
   pets: PawPrint,
   medical: Stethoscope,
   prescriptions: Pill,
@@ -69,7 +71,7 @@ export function MobileBottomNav() {
 
   const groups = GROUP_ORDER.map((label) => ({
     label,
-    items: MODULES.filter((m) => m.group === label && can(m.key)),
+    items: MODULES.filter((m) => m.group === label && !m.hidden && can(m.key)),
   })).filter((g) => g.items.length > 0);
 
   const isActive = (url: string) => pathname === url || pathname.startsWith(url + "/");

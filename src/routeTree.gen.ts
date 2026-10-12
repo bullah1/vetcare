@@ -18,6 +18,7 @@ import { Route as AuthenticatedAppointmentHistoryRouteImport } from './routes/_a
 import { Route as AuthenticatedAppointmentsRouteImport } from './routes/_authenticated/appointments'
 import { Route as AuthenticatedBusinessReportRouteImport } from './routes/_authenticated/business-report'
 import { Route as AuthenticatedCashDrawerRouteImport } from './routes/_authenticated/cash-drawer'
+import { Route as AuthenticatedClinicBillRouteImport } from './routes/_authenticated/clinic-bill'
 import { Route as AuthenticatedClinicDashboardRouteImport } from './routes/_authenticated/clinic-dashboard'
 import { Route as AuthenticatedClinicalIntelligenceRouteImport } from './routes/_authenticated/clinical-intelligence'
 import { Route as AuthenticatedClinicalVisitRouteImport } from './routes/_authenticated/clinical-visit'
@@ -88,6 +89,11 @@ const AuthenticatedBusinessReportRoute =
 const AuthenticatedCashDrawerRoute = AuthenticatedCashDrawerRouteImport.update({
   id: '/cash-drawer',
   path: '/cash-drawer',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedClinicBillRoute = AuthenticatedClinicBillRouteImport.update({
+  id: '/clinic-bill',
+  path: '/clinic-bill',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedClinicDashboardRoute =
@@ -225,6 +231,7 @@ export interface FileRoutesByFullPath {
   '/appointments': typeof AuthenticatedAppointmentsRoute
   '/business-report': typeof AuthenticatedBusinessReportRoute
   '/cash-drawer': typeof AuthenticatedCashDrawerRoute
+  '/clinic-bill': typeof AuthenticatedClinicBillRoute
   '/clinic-dashboard': typeof AuthenticatedClinicDashboardRoute
   '/clinical-intelligence': typeof AuthenticatedClinicalIntelligenceRoute
   '/clinical-visit': typeof AuthenticatedClinicalVisitRoute
@@ -258,6 +265,7 @@ export interface FileRoutesByTo {
   '/appointments': typeof AuthenticatedAppointmentsRoute
   '/business-report': typeof AuthenticatedBusinessReportRoute
   '/cash-drawer': typeof AuthenticatedCashDrawerRoute
+  '/clinic-bill': typeof AuthenticatedClinicBillRoute
   '/clinic-dashboard': typeof AuthenticatedClinicDashboardRoute
   '/clinical-intelligence': typeof AuthenticatedClinicalIntelligenceRoute
   '/clinical-visit': typeof AuthenticatedClinicalVisitRoute
@@ -293,6 +301,7 @@ export interface FileRoutesById {
   '/_authenticated/appointments': typeof AuthenticatedAppointmentsRoute
   '/_authenticated/business-report': typeof AuthenticatedBusinessReportRoute
   '/_authenticated/cash-drawer': typeof AuthenticatedCashDrawerRoute
+  '/_authenticated/clinic-bill': typeof AuthenticatedClinicBillRoute
   '/_authenticated/clinic-dashboard': typeof AuthenticatedClinicDashboardRoute
   '/_authenticated/clinical-intelligence': typeof AuthenticatedClinicalIntelligenceRoute
   '/_authenticated/clinical-visit': typeof AuthenticatedClinicalVisitRoute
@@ -328,6 +337,7 @@ export interface FileRouteTypes {
     | '/appointments'
     | '/business-report'
     | '/cash-drawer'
+    | '/clinic-bill'
     | '/clinic-dashboard'
     | '/clinical-intelligence'
     | '/clinical-visit'
@@ -361,6 +371,7 @@ export interface FileRouteTypes {
     | '/appointments'
     | '/business-report'
     | '/cash-drawer'
+    | '/clinic-bill'
     | '/clinic-dashboard'
     | '/clinical-intelligence'
     | '/clinical-visit'
@@ -395,6 +406,7 @@ export interface FileRouteTypes {
     | '/_authenticated/appointments'
     | '/_authenticated/business-report'
     | '/_authenticated/cash-drawer'
+    | '/_authenticated/clinic-bill'
     | '/_authenticated/clinic-dashboard'
     | '/_authenticated/clinical-intelligence'
     | '/_authenticated/clinical-visit'
@@ -490,6 +502,13 @@ declare module '@tanstack/react-router' {
       path: '/cash-drawer'
       fullPath: '/cash-drawer'
       preLoaderRoute: typeof AuthenticatedCashDrawerRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/clinic-bill': {
+      id: '/_authenticated/clinic-bill'
+      path: '/clinic-bill'
+      fullPath: '/clinic-bill'
+      preLoaderRoute: typeof AuthenticatedClinicBillRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/clinic-dashboard': {
@@ -663,6 +682,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedAppointmentsRoute: typeof AuthenticatedAppointmentsRoute
   AuthenticatedBusinessReportRoute: typeof AuthenticatedBusinessReportRoute
   AuthenticatedCashDrawerRoute: typeof AuthenticatedCashDrawerRoute
+  AuthenticatedClinicBillRoute: typeof AuthenticatedClinicBillRoute
   AuthenticatedClinicDashboardRoute: typeof AuthenticatedClinicDashboardRoute
   AuthenticatedClinicalIntelligenceRoute: typeof AuthenticatedClinicalIntelligenceRoute
   AuthenticatedClinicalVisitRoute: typeof AuthenticatedClinicalVisitRoute
@@ -694,6 +714,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAppointmentsRoute: AuthenticatedAppointmentsRoute,
   AuthenticatedBusinessReportRoute: AuthenticatedBusinessReportRoute,
   AuthenticatedCashDrawerRoute: AuthenticatedCashDrawerRoute,
+  AuthenticatedClinicBillRoute: AuthenticatedClinicBillRoute,
   AuthenticatedClinicDashboardRoute: AuthenticatedClinicDashboardRoute,
   AuthenticatedClinicalIntelligenceRoute:
     AuthenticatedClinicalIntelligenceRoute,
