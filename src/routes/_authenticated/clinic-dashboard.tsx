@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { HeartPulse, CalendarDays, ReceiptText, Search } from "lucide-react";
+import { HeartPulse, CalendarDays, ReceiptText, Search, Printer } from "lucide-react";
 import { ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -16,6 +16,7 @@ import { money } from "@/components/ReceiveAppointmentCashDialog";
 import { apptStatus } from "@/lib/clinic";
 import { computeClinicDashboard, isCancelledSale, loadClinicDashboard, type Row } from "@/lib/clinic-dashboard";
 import { monthStartDhaka, todayDhaka } from "@/lib/sales-ledger";
+import { printClinicReport } from "@/lib/clinic-report-print";
 import { shiftDay } from "@/lib/sales-summary";
 
 export const Route = createFileRoute("/_authenticated/clinic-dashboard")({
@@ -68,7 +69,7 @@ function ClinicDashboard() {
     <div className="space-y-4">
       <PageHeader
         title="Clinic Dashboard"
-        description="Visits, clinic bills, costs, doctor share and profit for the dates you pick."
+        description="Appointment history, clinic bills, costs, doctor share and profit for the dates you pick. Print any month."
         icon={HeartPulse}
         actions={
           <>
@@ -83,6 +84,9 @@ function ClinicDashboard() {
               </div>
             )}
             <Button asChild variant="outline" size="sm"><Link to="/appointments"><CalendarDays className="h-4 w-4" /> Appointments</Link></Button>
+            <Button variant="outline" size="sm" disabled={!data || !view} onClick={() => data && view && printClinicReport(data, view, from, to)}>
+              <Printer className="h-4 w-4" /> Print report
+            </Button>
             <Button asChild size="sm"><Link to="/clinic-bill" search={{}}><ReceiptText className="h-4 w-4" /> Service bill</Link></Button>
           </>
         }
@@ -156,13 +160,13 @@ function ClinicDashboard() {
             </CardContent>
           </Card>
 
-          <Tabs defaultValue="services">
+          <Tabs defaultValue="visits">
             <TabsList className="flex w-full flex-wrap h-auto justify-start">
+              <TabsTrigger value="visits">Appointment history</TabsTrigger>
+              <TabsTrigger value="bills">Bills</TabsTrigger>
               <TabsTrigger value="services">Services</TabsTrigger>
               <TabsTrigger value="doctors">Doctors</TabsTrigger>
               <TabsTrigger value="problems">Problems</TabsTrigger>
-              <TabsTrigger value="visits">Visit history</TabsTrigger>
-              <TabsTrigger value="bills">Bills</TabsTrigger>
             </TabsList>
 
             <TabsContent value="services">

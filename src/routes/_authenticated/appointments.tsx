@@ -242,7 +242,7 @@ function AppointmentsPage() {
           <>
             <Input type="date" value={day} onChange={(e) => setDay(e.target.value)} className="h-9 w-full sm:w-auto" />
             <Button asChild variant="outline">
-              <Link to="/clinic-dashboard"><BarChart3 className="h-4 w-4" /> Dashboard</Link>
+              <Link to="/clinic-dashboard"><BarChart3 className="h-4 w-4" /> History & report</Link>
             </Button>
             <Button onClick={() => { setForm({ ...emptyForm, scheduled_at: `${day}T10:00` }); setOpen(true); }}>
               <Plus className="h-4 w-4" /> New
