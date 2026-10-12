@@ -356,13 +356,13 @@ function DeliveryReportPage() {
         <Stat label="Cancelled / Returned" value={String(k.canc)} sub={`Return rate ${pct(k.canc, k.closed)} · ${fmt(k.returnedValue)} goods`} tone="text-destructive" />
         <Stat label="Collected on delivery" value={fmt(k.collected)} sub="Delivered parcels" />
         <Stat label="Product value sent" value={fmt(k.productValue)} sub="Excludes cancelled" />
-        <Stat label="Delivery charges" value={fmt(k.charges)} sub="Not part of sales" />
+        <Stat label="Delivery charges" value={fmt(k.charges)} sub="POS charges are inside the bill" />
         <Stat label="COD charges (courier)" value={fmt(k.codCharges)} sub="Added to COD amount" />
       </div>
 
       {/* Delivery income vs real cost — collecting a charge is not profit by itself. */}
       <div className="mb-4 grid grid-cols-2 gap-2.5 md:grid-cols-4">
-        <Stat label="Delivery charge income" value={fmt(money.income)} sub="Customer-paid charges on delivered parcels" />
+        <Stat label="Delivery charge income" value={fmt(money.income)} sub="Charges not already in the bill, delivered parcels" />
         <Stat label="Actual delivery cost" value={fmt(money.cost)} sub={money.costMissing ? `${money.costMissing} parcel(s) without cost entered` : "Rider fees + courier deductions"} tone={money.costMissing ? "text-amber-700" : ""} />
         <Stat label="Net delivery income" value={fmt(money.net)} tone={money.net < 0 ? "text-destructive" : "text-emerald-700"} sub="Income − actual cost" />
         <Stat label="Waiting to be settled" value={fmt(money.codPending + money.cashPending)} sub={`Courier COD ${fmt(money.codPending)} · rider cash ${fmt(money.cashPending)}`} />

@@ -558,7 +558,7 @@ function DeliveryTab({ c, p }: { c: Computed; p: Computed | null }) {
 
       <Section title="Every delivery record">
         <DataTable rows={c.raw.shipments} columns={parcelCols} />
-        <p className="mt-2 text-[11px] text-muted-foreground">Delivery charge income counts only delivered parcels. Delivery records never change sales, stock or cash.</p>
+        <p className="mt-2 text-[11px] text-muted-foreground">Delivery charge income counts only delivered parcels. A delivery charge added in POS is a line on the bill, so it is already in sales, cash and profit and is not counted here again.</p>
       </Section>
     </div>
   );

@@ -34,14 +34,21 @@ export type Receipt = {
   payments?: InvoicePayment[];
   status?: string;
   notes?: string | null;
-  /** Local delivery (rider) or courier parcel of this invoice. Shown on the
-   *  invoice only — the charges are NOT part of the sale's total/paid/due. */
+  /** Local delivery (rider) or courier parcel of this invoice. Unless
+   *  `inBill`, the charges are NOT part of the sale's total/paid/due. */
   delivery?: ReceiptDelivery | null;
+  /** The customer's older unpaid bills at the time of this bill, and what was paid on them now. */
+  prevDue?: { before: number; paid: number; after: number } | null;
 };
+
+/** Name of the bill line that carries a delivery charge inside the sale. */
+export const DELIVERY_LINE_NAME = "Delivery charge";
 
 export type ReceiptDelivery = {
   /** "local" = own delivery man / rider, "courier" = Steadfast etc. */
   kind?: "local" | "courier";
+  /** The delivery charge is already a line on the bill (counted in total, paid and due). */
+  inBill?: boolean;
   /** Delivery / courier charge. */
   charge: number;
   /** Courier COD charge (e.g. 1% of the amount collected). */
@@ -72,7 +79,24 @@ export function courierTrackingUrl(courier?: string | null, trackingCode?: strin
 
 const humanStatus = (s?: string | null) => (s ? s.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase()) : "");
 
-const onCustomer = (r: Receipt) => !!r.delivery && r.delivery.paidBy !== "shop";
+const onCustomer = (r: Receipt) => !!r.delivery && r.delivery.paidBy !== "shop" && !r.delivery.inBill;
+/** Delivery shown with separate charges (old style) vs. charge inside the bill. */
+const extrasStyle = (r: Receipt) => !!r.delivery && !r.delivery.inBill;
+/** Previous-due summary rows, shown when the customer owed money before this bill. */
+function prevRows(r: Receipt): { label: string; value: number; strong?: boolean; due?: boolean }[] | null {
+  const p = r.prevDue;
+  if (!p || !(p.before > 0.009)) return null;
+  const billTotal = r.total + extras(r);
+  const billDue = r.delivery ? toCollect(r) : Number(r.due || 0);
+  const billPaid = Math.max(0, billTotal - billDue);
+  return [
+    { label: "This bill", value: billTotal },
+    { label: "Previous due", value: p.before },
+    { label: "Total amount", value: billTotal + p.before, strong: true },
+    { label: "Total paid", value: billPaid + p.paid },
+    { label: "Total due", value: billDue + p.after, due: true },
+  ];
+}
 /** Delivery charge on the customer's bill (0 when none, or the shop pays it). */
 const deliveryCharge = (r: Receipt) => (onCustomer(r) ? Math.max(0, Number(r.delivery?.charge || 0)) : 0);
 /** Courier COD charge on the customer's bill. */
@@ -147,17 +171,20 @@ export function shareInvoiceOnWhatsApp(r: Receipt, phoneOverride?: string, targe
   lines.push(`Subtotal: ${money(r.subtotal)}`);
   if (r.discount) lines.push(`Discount: -${money(r.discount)}`);
   if (r.tax) lines.push(`Tax: ${money(r.tax)}`);
-  if (r.delivery) {
+  const prevW = prevRows(r);
+  if (prevW) {
+    for (const x of prevW) lines.push(x.strong || x.due ? `*${x.label}: ${money(x.value)}*` : `${x.label}: ${money(x.value)}`);
+  } else if (extrasStyle(r)) {
     lines.push(`Product total: ${money(r.total)}`);
     if (deliveryCharge(r) > 0) lines.push(`Delivery charge: ${money(deliveryCharge(r))}`);
     if (codChargeOf(r) > 0) lines.push(`COD charge: ${money(codChargeOf(r))}`);
     lines.push(`*Total bill: ${money(r.total + extras(r))}*`);
     lines.push(`Paid: ${money(r.paid)}`);
-    if (toCollect(r) > 0) lines.push(`*${r.delivery.kind === "courier" ? "Cash on delivery" : "To collect"}: ${money(toCollect(r))}*`);
+    if (toCollect(r) > 0) lines.push(`*${r.delivery!.kind === "courier" ? "Cash on delivery" : "To collect"}: ${money(toCollect(r))}*`);
   } else {
     lines.push(`*Total: ${money(r.total)}*`);
     lines.push(`Paid: ${money(r.paid)}`);
-    if (r.due > 0) lines.push(`*Due: ${money(r.due)}*`);
+    if (r.due > 0) lines.push(`*${r.delivery ? "To collect" : "Due"}: ${money(r.due)}*`);
   }
   lines.push("");
   lines.push(`Payment: ${paymentSummary(r)}`);
@@ -326,16 +353,19 @@ export function printInvoice(r: Receipt, targetWindow?: Window | null) {
     <div class="row"><span class="muted">Subtotal</span><span>${money(r.subtotal)}</span></div>
     <div class="row"><span class="muted">Tax</span><span>${money(r.tax)}</span></div>
     <div class="row"><span class="muted">Discount</span><span>− ${money(r.discount)}</span></div>
-    ${r.delivery
+    ${prevRows(r)
+      ? `<div class="row grand"><span>Grand Total</span><span>${money(r.total + extras(r))}</span></div>
+    ${prevRows(r)!.slice(1).map((x) => `<div class="row${x.strong ? " grand" : x.due && x.value > 0.009 ? " due" : ""}"><span${x.strong || x.due ? "" : ' class="muted"'}>${escapeHtml(x.label)}</span><span>${money(x.value)}</span></div>`).join("")}`
+      : extrasStyle(r)
       ? `<div class="row"><span>Product Total</span><span>${money(r.total)}</span></div>
     ${deliveryCharge(r) > 0 ? `<div class="row"><span class="muted">Delivery Charge</span><span>${money(deliveryCharge(r))}</span></div>` : ""}
     ${codChargeOf(r) > 0 ? `<div class="row"><span class="muted">COD Charge</span><span>${money(codChargeOf(r))}</span></div>` : ""}
     <div class="row grand"><span>Total Bill</span><span>${money(r.total + extras(r))}</span></div>
     <div class="row"><span class="muted">Paid</span><span>${money(r.paid)}</span></div>
-    ${toCollect(r) > 0 ? `<div class="row due"><span>${r.delivery.kind === "courier" ? "Cash on Delivery" : "To Collect"}</span><span>${money(toCollect(r))}</span></div>` : ""}`
+    ${toCollect(r) > 0 ? `<div class="row due"><span>${r.delivery!.kind === "courier" ? "Cash on Delivery" : "To Collect"}</span><span>${money(toCollect(r))}</span></div>` : ""}`
       : `<div class="row grand"><span>Grand Total</span><span>${money(r.total)}</span></div>
     <div class="row"><span class="muted">Paid</span><span>${money(r.paid)}</span></div>
-    ${r.due > 0 ? `<div class="row due"><span>Due</span><span>${money(r.due)}</span></div>` : ""}`}
+    ${r.due > 0 ? `<div class="row due"><span>${r.delivery ? "To Collect" : "Due"}</span><span>${money(r.due)}</span></div>` : ""}`}
   </div>
 
   ${paymentsBlock}
@@ -345,7 +375,7 @@ export function printInvoice(r: Receipt, targetWindow?: Window | null) {
       ? toCollect(r) > 0
         ? `Please pay ${money(toCollect(r))} to the ${r.delivery.kind === "courier" ? "courier" : "delivery man"} when you receive your order.`
         : "Your order is fully paid — nothing to pay on delivery."
-      : `Please retain this invoice for your records${r.due > 0 ? ` — outstanding balance of ${money(r.due)} is payable at your next visit.` : "."}`
+      : `Please retain this invoice for your records${(prevRows(r)?.[4].value ?? r.due) > 0 ? ` — outstanding balance of ${money(prevRows(r)?.[4].value ?? r.due)} is payable at your next visit.` : "."}`
   }</div>
 
   ${r.notes ? `<div class="notes"><strong>Note:</strong> ${escapeHtml(r.notes)}</div>` : ""}
@@ -488,16 +518,20 @@ export function printThermal(r: Receipt, override?: Partial<ThermalSettings>) {
   <div class="tot"><span>Subtotal</span><span>${money(r.subtotal)}</span></div>
   <div class="tot"><span>Tax</span><span>${money(r.tax)}</span></div>
   <div class="tot"><span>Discount</span><span>− ${money(r.discount)}</span></div>
-  ${r.delivery
+  ${prevRows(r)
+    ? `<div class="tot grand"><span>THIS BILL</span><span>${money(r.total + extras(r))}</span></div>
+  ${payLines}
+  ${prevRows(r)!.slice(1).map((x) => `<div class="tot${x.strong ? " grand" : ""}"><span>${x.strong || x.due ? `<b>${escapeHtml(x.label)}</b>` : escapeHtml(x.label)}</span><span>${x.due ? `<b>${money(x.value)}</b>` : money(x.value)}</span></div>`).join("")}`
+    : extrasStyle(r)
     ? `<div class="tot"><span>Product total</span><span>${money(r.total)}</span></div>
   ${deliveryCharge(r) > 0 ? `<div class="tot"><span>Delivery</span><span>${money(deliveryCharge(r))}</span></div>` : ""}
   ${codChargeOf(r) > 0 ? `<div class="tot"><span>COD charge</span><span>${money(codChargeOf(r))}</span></div>` : ""}
   <div class="tot grand"><span>TOTAL BILL</span><span>${money(r.total + extras(r))}</span></div>
   ${payLines}
-  ${toCollect(r) > 0 ? `<div class="tot"><span>${r.delivery.kind === "courier" ? "COD" : "To collect"}</span><span>${money(toCollect(r))}</span></div>` : ""}`
+  ${toCollect(r) > 0 ? `<div class="tot"><span>${r.delivery!.kind === "courier" ? "COD" : "To collect"}</span><span>${money(toCollect(r))}</span></div>` : ""}`
     : `<div class="tot grand"><span>TOTAL</span><span>${money(r.total)}</span></div>
   ${payLines}
-  ${r.due > 0 ? `<div class="tot"><span>Due</span><span>${money(r.due)}</span></div>` : ""}`}
+  ${r.due > 0 ? `<div class="tot"><span>${r.delivery ? "To collect" : "Due"}</span><span>${money(r.due)}</span></div>` : ""}`}
   <div class="sep"></div>`;
 
   const footerBlock = `

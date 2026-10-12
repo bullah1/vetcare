@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { CustomerPicker, useOwnerOptions } from "@/components/CustomerPetPicker";
 import { fetchAll } from "@/lib/fetch-all";
 import { fetchSaleReceipt } from "@/lib/sale-receipt";
+import { fetchOpenBills, payPreviousDues, splitPayments, usePreviousDue, type PrevDueResult } from "@/lib/previous-due";
 import { printInvoice, printThermal } from "@/lib/invoice-print";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -127,7 +128,7 @@ function BillTab({ appointmentId }: { appointmentId: string | null }) {
   const [payments, setPayments] = useState<{ key: string; method: string; amount: string }[]>([{ key: uid(), method: "cash", amount: "" }]);
   const [notes, setNotes] = useState("");
   const [q, setQ] = useState("");
-  const [done, setDone] = useState<{ sale_id: string; invoice_no: string; total: number; paid: number; due: number } | null>(null);
+  const [done, setDone] = useState<{ sale_id: string; invoice_no: string; total: number; paid: number; due: number; prevDue?: PrevDueResult | null } | null>(null);
   const [touchedPay, setTouchedPay] = useState(false);
 
   // Fill from the appointment once.
@@ -149,8 +150,12 @@ function BillTab({ appointmentId }: { appointmentId: string | null }) {
   useEffect(() => {
     if (!touchedPay) setPayments((p) => (p.length === 1 ? [{ ...p[0], amount: total ? String(total) : "" }] : p));
   }, [total, touchedPay]);
-  const due = Math.max(0, total - paidSum);
-  const change = Math.max(0, paidSum - total);
+  const prev = usePreviousDue(ownerId || null);
+  const owed = ownerId ? prev.total : 0;
+  // This bill first, anything more clears older dues; only the rest is change.
+  const sp = splitPayments(payments.map((p) => ({ method: p.method, amount: Number(p.amount) || 0 })), total, owed);
+  const due = Math.max(0, total - sp.billPaid);
+  const change = sp.change;
 
   const results = useMemo(() => {
     const t = q.trim().toLowerCase();
@@ -188,19 +193,27 @@ function BillTab({ appointmentId }: { appointmentId: string | null }) {
         seen.set(l.name, n);
         return n > 1 && l.kind !== "product" ? { ...l, name: `${l.name} (${n})` } : l;
       });
-      // Pay no more than the bill: the extra is change given back.
-      let left = total;
-      const pays = payments.map((p) => {
-        const a = Math.min(Number(p.amount) || 0, left);
-        left -= a;
-        return { method: p.method, amount: Math.round(a * 100) / 100 };
-      });
-      return createClinicBill({ appointmentId, ownerId: ownerId || null, doctorId: doctorId || null, lines: named, payments: pays, discount: disc, notes });
+      const res = await createClinicBill({ appointmentId, ownerId: ownerId || null, doctorId: doctorId || null, lines: named, payments: sp.bill, discount: disc, notes });
+      let prevDue: PrevDueResult | null = null;
+      if (ownerId) {
+        try {
+          prevDue = sp.old.length
+            ? await payPreviousDues(ownerId, sp.old, res.sale_id, res.invoice_no)
+            : await fetchOpenBills(ownerId, res.sale_id).then((b) => {
+                const before = Math.round(b.reduce((a, x) => a + x.due, 0) * 100) / 100;
+                return { before, paid: 0, after: before, invoices: [] };
+              });
+        } catch (e: any) {
+          toast.error(`Bill saved, but the previous due was not collected: ${e?.message ?? e}. Collect it from Due Bills.`);
+        }
+      }
+      return { ...res, prevDue };
     },
     onSuccess: (r) => {
       setDone(r);
       qc.invalidateQueries({ queryKey: ["appointments"] });
       qc.invalidateQueries({ queryKey: ["clinic-bill-products"] });
+      qc.invalidateQueries({ queryKey: ["previous-due"] });
       toast.success(`Bill ${r.invoice_no} saved`);
     },
     onError: (e: any) => toast.error(e?.message ?? "Could not save the bill"),
@@ -211,6 +224,7 @@ function BillTab({ appointmentId }: { appointmentId: string | null }) {
     const w = window.open("", "_blank", kind === "a4" ? "width=900,height=1000" : "width=420,height=800");
     try {
       const r = await fetchSaleReceipt(done.sale_id);
+      if (done.prevDue) r.prevDue = done.prevDue;
       if (kind === "a4") printInvoice(r, w);
       else { w?.close(); printThermal(r); }
     } catch (e: any) {
@@ -340,6 +354,17 @@ function BillTab({ appointmentId }: { appointmentId: string | null }) {
           </div>
         </div>
         {due > 0.004 && <div className="flex justify-between rounded-md bg-destructive/10 px-2 py-1.5 text-sm font-medium text-destructive"><span>Due (baki)</span><span className="tabular-nums">{fmt(due)}</span></div>}
+        {owed > 0.004 && (
+          <div className="space-y-1 rounded-md border border-amber-300 bg-amber-50/70 p-2 text-sm dark:bg-amber-950/20">
+            <div className="flex justify-between text-amber-900 dark:text-amber-200"><span>Previous due ({prev.bills.length} bill{prev.bills.length > 1 ? "s" : ""})</span><b className="tabular-nums">{fmt(owed)}</b></div>
+            <div className="flex justify-between font-semibold"><span>Total amount</span><span className="tabular-nums">{fmt(total + owed)}</span></div>
+            {sp.oldPaid > 0.004 && <div className="flex justify-between text-emerald-700"><span>Goes to previous due</span><span className="tabular-nums">{fmt(sp.oldPaid)}</span></div>}
+            <div className="flex justify-between text-destructive"><span>Total due after this</span><span className="tabular-nums">{fmt(due + owed - sp.oldPaid)}</span></div>
+            <Button size="sm" variant="outline" className="h-7 w-full bg-background" onClick={() => { setTouchedPay(true); setPayments([{ key: uid(), method: payments[0]?.method ?? "cash", amount: String(Math.round((total + owed) * 100) / 100) }]); }}>
+              Pay all {fmt(total + owed)}
+            </Button>
+          </div>
+        )}
         {change > 0.004 && <div className="flex justify-between rounded-md bg-emerald-50 px-2 py-1.5 text-sm text-emerald-800"><span>Change to give</span><span className="tabular-nums">{fmt(change)}</span></div>}
         <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Note (optional)" />
         <Button className="h-11 w-full text-base" disabled={save.isPending || !lines.length} onClick={() => save.mutate()}>
@@ -356,6 +381,13 @@ function BillTab({ appointmentId }: { appointmentId: string | null }) {
               <div className="flex justify-between"><span className="text-muted-foreground">Total</span><b className="tabular-nums">{fmt(done.total)}</b></div>
               <div className="flex justify-between"><span className="text-muted-foreground">Paid</span><span className="tabular-nums">{fmt(done.paid)}</span></div>
               {Number(done.due) > 0 && <div className="flex justify-between text-destructive"><span>Due</span><b className="tabular-nums">{fmt(done.due)}</b></div>}
+              {done.prevDue && done.prevDue.before > 0.004 && (
+                <>
+                  <div className="flex justify-between border-t pt-1"><span className="text-muted-foreground">Previous due</span><span className="tabular-nums">{fmt(done.prevDue.before)}</span></div>
+                  {done.prevDue.paid > 0 && <div className="flex justify-between text-emerald-700"><span>Paid on previous due</span><span className="tabular-nums">{fmt(done.prevDue.paid)}</span></div>}
+                  <div className="flex justify-between font-semibold text-destructive"><span>Total due</span><span className="tabular-nums">{fmt(Number(done.due) + done.prevDue.after)}</span></div>
+                </>
+              )}
             </div>
           )}
           <DialogFooter className="grid grid-cols-2 gap-2 sm:grid-cols-2">

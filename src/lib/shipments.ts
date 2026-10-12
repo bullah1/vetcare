@@ -5,7 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { fetchAll, fetchAllIn } from "@/lib/fetch-all";
 import { dayRangeISO } from "@/lib/sales-ledger";
 import { dhakaDayKey } from "@/lib/sales-summary";
-import { courierName } from "@/lib/invoice-print";
+import { courierName, DELIVERY_LINE_NAME } from "@/lib/invoice-print";
 import { DELIVERY_STATUS_LABEL } from "@/lib/deliveries";
 import { courierStage, localStage, type ParcelStage } from "@/lib/courier-status";
 
@@ -43,6 +43,8 @@ export type Shipment = {
   chargeIncome: number;
   /** What the rider / courier collects from the customer. */
   collect: number;
+  /** Local delivery whose charge is a line on the bill (already in sales and cash). */
+  chargeInBill?: boolean;
   /** Goods already taken back in POS (sale refunded / partly refunded / cancelled). */
   returnedInPos: boolean;
   /** Real delivery cost (rider fee, or courier deduction + return charge). null = not entered yet. */
@@ -92,6 +94,13 @@ export async function loadShipments(from: string, to: string): Promise<Shipment[
     [...locals.map((d) => d.sale_id), ...couriers.map((c: any) => c.sale_id)],
     (ids) => db.from("sales").select("id,total,due,status").in("id", ids).order("id"),
   );
+  // Newer POS bills carry the delivery charge as a bill line: it is already in the
+  // sale (cash, sales, profit), so it is not delivery income or extra to collect.
+  const inBillLines = await fetchAllIn<{ sale_id: string }>(
+    locals.map((d) => d.sale_id),
+    (ids) => db.from("sale_items").select("sale_id").in("sale_id", ids).is("product_id", null).eq("name", DELIVERY_LINE_NAME).order("id"),
+  ).catch(() => [] as { sale_id: string }[]);
+  const chargeInBill = new Set(inBillLines.map((x) => x.sale_id));
   const RETURNED = new Set(["refunded", "partial_refund", "void"]);
   const saleById = new Map(sales.map((s) => [s.id, s]));
 
@@ -121,8 +130,9 @@ export async function loadShipments(from: string, to: string): Promise<Shipment[
       productValue: num(s?.total),
       charge,
       codCharge: 0,
-      chargeIncome: charge,
-      collect: num(s?.due) + charge,
+      chargeIncome: chargeInBill.has(d.sale_id) ? 0 : charge,
+      collect: num(s?.due) + (chargeInBill.has(d.sale_id) ? 0 : charge),
+      chargeInBill: chargeInBill.has(d.sale_id),
       returnedInPos: RETURNED.has(String(s?.status)),
       // A fee of 0 that was never paid = not entered yet.
       cost: riderFee > 0 || d.rider_paid_at ? riderFee : null,

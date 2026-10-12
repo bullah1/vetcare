@@ -1,5 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
-import type { Receipt } from "@/lib/invoice-print";
+import { DELIVERY_LINE_NAME, type Receipt } from "@/lib/invoice-print";
 import { fetchReceiptDelivery } from "@/lib/deliveries";
 
 /**
@@ -10,7 +10,7 @@ export async function fetchSaleReceipt(saleId: string): Promise<Receipt> {
   const { data, error } = await supabase
     .from("sales")
     .select(
-      "id,invoice_no,created_at,total,paid,due,status,subtotal,discount,tax,notes, owner:pet_owners(full_name,phone), sale_items(name,quantity,unit_price,discount,tax,line_total), payments(method,amount,reference)",
+      "id,invoice_no,created_at,total,paid,due,status,subtotal,discount,tax,notes, owner:pet_owners(full_name,phone), sale_items(name,quantity,unit_price,discount,tax,line_total,product_id), payments(method,amount,reference)",
     )
     .eq("id", saleId)
     .maybeSingle();
@@ -18,6 +18,10 @@ export async function fetchSaleReceipt(saleId: string): Promise<Receipt> {
   if (!data) throw new Error("Invoice not found");
   const d = data as any;
   const delivery = await fetchReceiptDelivery(saleId);
+  // POS puts the delivery charge on the bill as its own line — don't add it a second time.
+  if (delivery && delivery.kind !== "courier" && (d.sale_items ?? []).some((it: any) => !it.product_id && it.name === DELIVERY_LINE_NAME)) {
+    delivery.inBill = true;
+  }
   return {
     sale_id: d.id,
     invoice_no: d.invoice_no,

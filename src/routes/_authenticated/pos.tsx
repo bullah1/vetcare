@@ -25,7 +25,8 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { ReturnFlow } from "@/components/ReturnFlow";
 import { SalesHistory } from "@/components/SalesHistory";
 import { toast } from "sonner";
-import { printInvoice, printThermal, receiptExtras, type Receipt } from "@/lib/invoice-print";
+import { DELIVERY_LINE_NAME, printInvoice, printThermal, receiptExtras, type Receipt } from "@/lib/invoice-print";
+import { fetchOpenBills, payPreviousDues, splitPayments, usePreviousDue } from "@/lib/previous-due";
 import { useEffect } from "react";
 import { resolveProductImageUrl } from "@/components/ProductImageUpload";
 import ThermalPrinterSettings from "@/components/ThermalPrinterSettings";
@@ -843,6 +844,11 @@ function POSPage() {
     if (delOn && !delManId && deliveryMen.length === 1) setDelManId(deliveryMen[0].id);
   }, [delOn, delManId, deliveryMen]);
   const delChargeNum = delOn ? Math.max(0, Number(delCharge) || 0) : 0;
+  // The delivery charge is part of the bill: it is paid with it, goes to the
+  // cash drawer, counts in sales and is pure profit (no cost).
+  const grandTotal = Math.round((totals.total + delChargeNum) * 100) / 100;
+  const prev = usePreviousDue(ownerId || null);
+  const prevDue = prev.total;
   const resetDelivery = () => {
     setDelOn(false); setDelManId(""); setDelCharge(""); setDelAddress(""); setDelNote("");
     setDelAdding(false); setDelNewName(""); setDelNewPhone("");
@@ -868,17 +874,22 @@ function POSPage() {
         if (!delManId) throw new Error("Choose a delivery man (or turn Delivery off)");
         if (!(Number(delCharge || 0) >= 0)) throw new Error("Delivery charge must be 0 or more");
       }
-      const tendered = paidAmount === "" ? totals.total : Number(paidAmount);
-      // Money kept in the drawer never exceeds the invoice total — extra cash is change returned to the customer
-      const paid = method === "due" ? 0 : Math.max(0, Math.min(tendered, totals.total));
-      if (totals.total - paid > 0.009 && !ownerId) {
+      const tendered = paidAmount === "" ? grandTotal : Number(paidAmount);
+      // This bill is paid first; anything more clears the customer's older dues
+      // (oldest first). Only what is left after that is change.
+      const split = splitPayments(method === "due" ? [] : [{ method, amount: tendered }], grandTotal, ownerId ? prevDue : 0);
+      const paid = split.billPaid;
+      if (grandTotal - paid > 0.009 && !ownerId) {
         throw new Error("Select a customer for a due sale — the due must be assigned to someone.");
       }
       const items = cart.map((l) => {
         const lineSub = l.unit_price * l.quantity - l.discount;
         const lineTax = lineSub * (l.tax_percent / 100);
-        return { product_id: l.product_id, name: l.name, quantity: l.quantity, unit_price: l.unit_price, discount: l.discount, tax: lineTax };
+        return { product_id: l.product_id as string | null, name: l.name, quantity: l.quantity, unit_price: l.unit_price, discount: l.discount, tax: lineTax };
       });
+      if (delOn && delChargeNum > 0) {
+        items.push({ product_id: null, name: DELIVERY_LINE_NAME, quantity: 1, unit_price: delChargeNum, discount: 0, tax: 0 });
+      }
       const payments = method === "due" ? [] : [{ method, amount: paid, reference: null }];
 
       const { data, error } = await (supabase.rpc as any)("create_sale", {
@@ -894,7 +905,7 @@ function POSPage() {
         total: Number(rpc.total),
         paid: Number(rpc.paid),
         due: Number(rpc.due),
-        subtotal: totals.sub,
+        subtotal: totals.sub + (delOn ? delChargeNum : 0),
         tax: totals.tax,
         discount: totals.discount,
         method,
@@ -918,15 +929,29 @@ function POSPage() {
         await markHeldBillConverted(resumedBill.id, saleRow?.id ?? null);
       }
       if (delOn) {
-        // Separate record; the sale above is already final and is not touched.
+        // Rider / address record. The charge is already a line on the bill.
         try {
           await createDelivery({ saleId: rpc.sale_id, deliveryManId: delManId, charge: delChargeNum, address: delAddress, note: delNote });
           const man = deliveryMen.find((m) => m.id === delManId);
           snapshot.delivery =
             deliveryForReceipt(await fetchActiveDelivery(rpc.sale_id)) ??
             { kind: "local", charge: delChargeNum, man: man?.name ?? null, manPhone: man?.phone ?? null, address: delAddress || null, status: "Pending" };
+          if (snapshot.delivery && delChargeNum > 0) snapshot.delivery.inBill = true;
         } catch (e: any) {
           toast.error(`Bill saved, but the delivery was not created: ${e?.message ?? e}. Use "Send for delivery".`);
+        }
+      }
+      if (ownerId) {
+        // Older dues: show them on the bill and clear them with any extra paid.
+        try {
+          snapshot.prevDue = split.old.length
+            ? await payPreviousDues(ownerId, split.old, rpc.sale_id, rpc.invoice_no)
+            : await fetchOpenBills(ownerId, rpc.sale_id).then((b) => {
+                const before = Math.round(b.reduce((a, x) => a + x.due, 0) * 100) / 100;
+                return { before, paid: 0, after: before };
+              });
+        } catch (e: any) {
+          toast.error(`Bill saved, but the previous due was not collected: ${e?.message ?? e}. Collect it from Due Bills.`);
         }
       }
       return snapshot;
@@ -951,6 +976,7 @@ function POSPage() {
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       qc.invalidateQueries({ queryKey: ["owner-visit-counts"] });
       qc.invalidateQueries({ queryKey: ["customers-ledger"] });
+      qc.invalidateQueries({ queryKey: ["previous-due"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -1085,10 +1111,12 @@ function POSPage() {
   }, [desktop]);
 
   const renderCartBody = (isDesk: boolean) => {
-    const paidNow = method === "due" ? 0 : Math.max(0, Math.min(paidAmount === "" ? totals.total : Number(paidAmount), totals.total));
-    const dueNow = Math.max(0, totals.total - paidNow);
-    const change = method !== "due" && paidAmount !== "" ? Math.max(0, Number(paidAmount) - totals.total) : 0;
-    const billTotal = totals.total + delChargeNum;
+    const owed = ownerId ? prevDue : 0;
+    const sp = splitPayments(method === "due" ? [] : [{ method, amount: paidAmount === "" ? grandTotal : Number(paidAmount) }], grandTotal, owed);
+    const paidNow = sp.billPaid;
+    const dueNow = Math.max(0, grandTotal - paidNow);
+    const change = method !== "due" && paidAmount !== "" ? sp.change : 0;
+    const billTotal = grandTotal;
     const delId = `del-on-${isDesk ? "d" : "m"}`;
     return (
     <div className="min-w-0 space-y-4">
@@ -1254,7 +1282,7 @@ function POSPage() {
               <Input className="bg-background" placeholder="Address" value={delAddress} onChange={(e) => setDelAddress(e.target.value)} />
             </div>
             <Input className="bg-background" placeholder="Note for delivery man (optional)" value={delNote} onChange={(e) => setDelNote(e.target.value)} />
-            <p className="text-[11px] text-muted-foreground">Delivery charge is printed on the bill only — not counted in sales, cash or profit.</p>
+            <p className="text-[11px] text-muted-foreground">Delivery charge is added to this bill — it goes to cash with the payment and counts in sales and profit.</p>
           </div>
         )}
       </div>
@@ -1294,10 +1322,28 @@ function POSPage() {
               }
               if (e.key === "Escape") { e.preventDefault(); focusSearch(); }
             }}
-            placeholder={method === "due" ? "Not paid now" : totals.total.toFixed(2)}
+            placeholder={method === "due" ? "Not paid now" : grandTotal.toFixed(2)}
             disabled={method === "due"}
           />
         </div>
+        {owed > 0.009 && (
+          <div className="space-y-1 rounded-md border border-amber-300 bg-amber-50/70 p-2 text-sm dark:bg-amber-950/20">
+            <div className="flex justify-between text-amber-900 dark:text-amber-200">
+              <span>Previous due ({prev.bills.length} bill{prev.bills.length > 1 ? "s" : ""})</span>
+              <span className="font-semibold tabular-nums">৳ {owed.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between font-semibold"><span>Total amount</span><span className="tabular-nums">৳ {(grandTotal + owed).toFixed(2)}</span></div>
+            {sp.oldPaid > 0.009 && (
+              <div className="flex justify-between text-emerald-700"><span>Goes to previous due</span><span className="tabular-nums">৳ {sp.oldPaid.toFixed(2)}</span></div>
+            )}
+            <div className="flex justify-between text-destructive"><span>Total due after this</span><span className="tabular-nums">৳ {(dueNow + owed - sp.oldPaid).toFixed(2)}</span></div>
+            {method !== "due" && (
+              <Button type="button" size="sm" variant="outline" className="h-7 w-full bg-background" onClick={() => setPaidAmount(Math.round((grandTotal + owed) * 100) / 100)}>
+                Pay all ৳ {(grandTotal + owed).toFixed(2)}
+              </Button>
+            )}
+          </div>
+        )}
         {change > 0 && (
           <p className="flex justify-between text-sm"><span className="text-muted-foreground">Change to return</span><span className="font-semibold tabular-nums">৳ {change.toFixed(2)}</span></p>
         )}
@@ -1323,8 +1369,8 @@ function POSPage() {
             : checkout.isPending
               ? "Saving…"
               : method === "due"
-                ? `Save due bill ৳ ${totals.total.toFixed(2)}`
-                : `Charge ৳ ${totals.total.toFixed(2)}`}
+                ? `Save due bill ৳ ${grandTotal.toFixed(2)}`
+                : `Charge ৳ ${grandTotal.toFixed(2)}`}
         </Button>
         <Button
           className="h-12"
@@ -1454,7 +1500,7 @@ function POSPage() {
           <Button className="h-12 w-full rounded-lg" size="lg" onClick={() => setCartOpen(true)}>
             <ShoppingCart className="h-4 w-4" />
             <span className="flex-1 text-left">{itemCount} item{itemCount !== 1 ? "s" : ""}</span>
-            <span className="tabular-nums font-semibold">৳ {totals.total.toFixed(2)}</span>
+            <span className="tabular-nums font-semibold">৳ {grandTotal.toFixed(2)}</span>
           </Button>
         </div>
       )}
@@ -1587,6 +1633,14 @@ function POSPage() {
                   <div className="flex justify-between"><span className="text-muted-foreground">Paid ({(receipt.payments?.length ? receipt.payments.map((p) => p.method).join(", ") : receipt.method) || "—"})</span><span className="tabular-nums">৳ {Number(receipt.paid).toFixed(2)}</span></div>
                   {Number(receipt.due) > 0 && (
                     <div className="flex justify-between font-medium text-destructive"><span>Remaining due</span><span className="tabular-nums">৳ {Number(receipt.due).toFixed(2)}</span></div>
+                  )}
+                  {receipt.prevDue && receipt.prevDue.before > 0.009 && (
+                    <div className="mt-2 space-y-1 rounded-md border border-amber-300 bg-amber-50/70 p-2 dark:bg-amber-950/20">
+                      <div className="flex justify-between"><span className="text-muted-foreground">Previous due</span><span className="tabular-nums">৳ {receipt.prevDue.before.toFixed(2)}</span></div>
+                      <div className="flex justify-between font-semibold"><span>Total amount</span><span className="tabular-nums">৳ {(Number(receipt.total) + receipt.prevDue.before).toFixed(2)}</span></div>
+                      {receipt.prevDue.paid > 0 && <div className="flex justify-between text-emerald-700"><span>Paid on previous due</span><span className="tabular-nums">৳ {receipt.prevDue.paid.toFixed(2)}</span></div>}
+                      <div className="flex justify-between font-semibold text-destructive"><span>Total due</span><span className="tabular-nums">৳ {(Number(receipt.due) + receipt.prevDue.after).toFixed(2)}</span></div>
+                    </div>
                   )}
                   {receipt.delivery && (() => {
                     const x = receiptExtras(receipt);
