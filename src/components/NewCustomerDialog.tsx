@@ -6,6 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 
@@ -17,9 +18,10 @@ export function NewCustomerDialog({ onCreated }: { onCreated?: (id: string) => v
   const [email, setEmail] = useState("");
   const [address, setAddress] = useState("");
   const [notes, setNotes] = useState("");
+  const [b2b, setB2b] = useState(false);
 
   const reset = () => {
-    setFullName(""); setPhone(""); setGender(""); setEmail(""); setAddress(""); setNotes("");
+    setFullName(""); setPhone(""); setGender(""); setEmail(""); setAddress(""); setNotes(""); setB2b(false);
   };
 
   const create = useMutation({
@@ -39,6 +41,10 @@ export function NewCustomerDialog({ onCreated }: { onCreated?: (id: string) => v
         .select("id")
         .single();
       if (error) throw error;
+      if (b2b) {
+        const { error: tErr } = await (supabase as any).from("pet_owners").update({ customer_type: "b2b" }).eq("id", data.id);
+        if (tErr) toast.error(`Customer saved, but not marked B2B: ${tErr.message}`);
+      }
       return data.id as string;
     },
     onSuccess: (id) => {
@@ -88,6 +94,10 @@ export function NewCustomerDialog({ onCreated }: { onCreated?: (id: string) => v
               ))}
             </div>
           </div>
+          <label className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm">
+            <span>B2B / Wholesale customer<span className="block text-xs text-muted-foreground">Uses wholesale prices in POS</span></span>
+            <Switch checked={b2b} onCheckedChange={setB2b} />
+          </label>
           <div className="space-y-2">
             <Label>Address</Label>
             <Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="optional" />

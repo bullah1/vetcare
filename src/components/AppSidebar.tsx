@@ -24,6 +24,7 @@ import {
   HeartPulse,
   Brain,
   ReceiptText,
+  PackageSearch,
 } from "lucide-react";
 import {
   Sidebar,
@@ -47,6 +48,7 @@ const ICONS: Record<string, typeof Users> = {
   clinical_intelligence: Brain,
   appointments: CalendarDays,
   clinic_bill: ReceiptText,
+  product_sales: PackageSearch,
   appointment_history: History,
   pets: PawPrint,
   clinical_visit: Stethoscope,

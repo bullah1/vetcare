@@ -27,6 +27,7 @@ import { SalesHistory } from "@/components/SalesHistory";
 import { toast } from "sonner";
 import { DELIVERY_LINE_NAME, printInvoice, printThermal, receiptExtras, type Receipt } from "@/lib/invoice-print";
 import { fetchOpenBills, payPreviousDues, splitPayments, usePreviousDue } from "@/lib/previous-due";
+import { useAuth } from "@/lib/auth-context";
 import { useEffect } from "react";
 import { resolveProductImageUrl } from "@/components/ProductImageUpload";
 import ThermalPrinterSettings from "@/components/ThermalPrinterSettings";
@@ -251,10 +252,20 @@ type Product = {
   id: string; name: string; sku: string | null; barcode: string | null;
   category: string; selling_price: number; tax_percent: number; stock_quantity: number; unit: string | null;
   low_stock_threshold: number | null; image_url: string | null;
+  /** B2B price list (null = same as selling price) and the lowest price allowed without an admin. */
+  wholesale_price?: number | null; min_selling_price?: number | null;
 };
-type CartLine = { product_id: string; name: string; unit_price: number; quantity: number; discount: number; tax_percent: number; stock_quantity: number; low_stock_threshold: number | null; nearest_expiry: string | null };
+type CartLine = {
+  product_id: string; name: string; unit_price: number; quantity: number; discount: number; tax_percent: number;
+  stock_quantity: number; low_stock_threshold: number | null; nearest_expiry: string | null;
+  /** Default price for this customer when added (retail or wholesale). */
+  list_price?: number;
+  min_price?: number | null;
+  /** Price typed by hand — kept when the customer changes. */
+  price_edited?: boolean;
+};
 
-type Owner = { id: string; full_name: string; phone: string | null; address?: string | null; visitCount?: number };
+type Owner = { id: string; full_name: string; phone: string | null; address?: string | null; visitCount?: number; customer_type?: string | null };
 
 
 const METHODS = ["cash", "bkash", "nagad", "rocket", "card", "bank", "due"] as const;
@@ -374,9 +385,14 @@ function POSPage() {
     queryFn: async () => {
       // Paged: the API returns at most 1000 rows per request, so products past
       // the first 1000 were missing from POS search and barcode scan.
-      return fetchAll<Product>(() => supabase.from("products")
-        .select("id,name,sku,barcode,category,selling_price,tax_percent,stock_quantity,unit,low_stock_threshold,image_url")
-        .eq("is_active", true).order("name").order("id"));
+      const base = "id,name,sku,barcode,category,selling_price,tax_percent,stock_quantity,unit,low_stock_threshold,image_url";
+      // Wholesale / minimum price columns may not exist yet on an older database.
+      return fetchAll<Product>(() => (supabase as any).from("products")
+        .select(`${base},wholesale_price,min_selling_price`)
+        .eq("is_active", true).order("name").order("id"))
+        .catch(() => fetchAll<Product>(() => supabase.from("products")
+          .select(base)
+          .eq("is_active", true).order("name").order("id")));
     },
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
@@ -432,6 +448,9 @@ function POSPage() {
         stock_quantity: Number(p?.stock_quantity ?? 0),
         low_stock_threshold: p?.low_stock_threshold ?? null,
         nearest_expiry: null,
+        min_price: p?.min_selling_price ?? null,
+        // A held price that is not today's selling price is kept as typed.
+        price_edited: p ? Math.abs(Number(it.unit_price) - Number(p.selling_price)) > 0.004 : true,
       };
     });
     if (lines.length === 0) return false;
@@ -486,7 +505,9 @@ function POSPage() {
 
   const { data: owners = [] } = useQuery({
     queryKey: ["owners"],
-    queryFn: () => fetchAll<Owner>(() => supabase.from("pet_owners").select("id,full_name,phone,address").order("full_name").order("id")),
+    queryFn: () =>
+      fetchAll<Owner>(() => (supabase as any).from("pet_owners").select("id,full_name,phone,address,customer_type").order("full_name").order("id"))
+        .catch(() => fetchAll<Owner>(() => supabase.from("pet_owners").select("id,full_name,phone,address").order("full_name").order("id"))),
     staleTime: 10 * 60_000,
     gcTime: 30 * 60_000,
     refetchOnWindowFocus: false,
@@ -516,6 +537,39 @@ function POSPage() {
     gcTime: 10 * 60_000,
     refetchOnWindowFocus: false,
   });
+
+  // B2B / wholesale customer: wholesale prices, and allowed users may change prices.
+  const { hasRole, can } = useAuth();
+  const isAdmin = hasRole("admin");
+  const isB2b = owners.find((o) => o.id === ownerId)?.customer_type === "b2b";
+  const canEditPrice = isB2b && can("price_override");
+  const isB2bRef = useRef(isB2b);
+  isB2bRef.current = isB2b;
+  const priceFor = (p: Product, b2b: boolean) =>
+    b2b && p.wholesale_price != null ? Number(p.wholesale_price) : Number(p.selling_price);
+  // Customer changed → lines not typed by hand take that customer's price.
+  useEffect(() => {
+    if (!products.length) return;
+    setCart((c) => {
+      let changed = false;
+      const next = c.map((l) => {
+        if (l.price_edited) return l;
+        const p = products.find((x) => x.id === l.product_id);
+        if (!p) return l;
+        const price = priceFor(p, isB2b);
+        if (Math.abs(price - l.unit_price) < 0.004 && l.list_price === price) return l;
+        changed = true;
+        return { ...l, unit_price: price, list_price: price, min_price: p.min_selling_price ?? null };
+      });
+      return changed ? next : c;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isB2b, products]);
+  const setLinePrice = (id: string, raw: string) =>
+    setCart((c) => c.map((l) => (l.product_id === id ? { ...l, unit_price: Math.max(0, Number(raw) || 0), price_edited: true } : l)));
+  const setLineDiscount = (id: string, raw: string) =>
+    setCart((c) => c.map((l) => (l.product_id === id ? { ...l, discount: Math.min(Math.max(0, Number(raw) || 0), l.unit_price * l.quantity) } : l)));
+  const belowMin = (l: CartLine) => l.min_price != null && l.unit_price < Number(l.min_price) - 0.004;
 
   const ownersWithCount = useMemo(() => {
     if (!visitCountMap) return owners;
@@ -659,8 +713,9 @@ function POSPage() {
       if (found) {
         return c.map((l) => l.product_id === p.id ? { ...l, quantity: l.quantity + qty } : l);
       }
+      const price = isB2bRef.current && p.wholesale_price != null ? Number(p.wholesale_price) : Number(p.selling_price);
       return [...c, {
-        product_id: p.id, name: p.name, unit_price: Number(p.selling_price),
+        product_id: p.id, name: p.name, unit_price: price, list_price: price, min_price: p.min_selling_price ?? null,
         quantity: qty, discount: 0, tax_percent: Number(p.tax_percent),
         stock_quantity: stock,
         low_stock_threshold: p.low_stock_threshold,
@@ -869,6 +924,8 @@ function POSPage() {
       if (cart.length === 0) throw new Error("Cart is empty");
       const zeroLine = cart.find((l) => !(l.quantity > 0));
       if (zeroLine) throw new Error(`Set a quantity for ${zeroLine.name} or remove it`);
+      const lowLine = cart.find(belowMin);
+      if (lowLine && !isAdmin) throw new Error(`${lowLine.name.trim()} is below its minimum price ৳${Number(lowLine.min_price).toFixed(2)} — only an admin can sell it lower`);
       if (delOn) {
         if (!delManId) throw new Error("Choose a delivery man (or turn Delivery off)");
         if (!(Number(delCharge || 0) >= 0)) throw new Error("Delivery charge must be 0 or more");
@@ -891,10 +948,15 @@ function POSPage() {
       }
       const payments = method === "due" ? [] : [{ method, amount: paid, reference: null }];
 
-      const { data, error } = await (supabase.rpc as any)("create_sale", {
-        _owner_id: ownerId || null, _items: items, _payments: payments,
-        _discount: totals.discount, _notes: null,
-      });
+      const args = { _owner_id: ownerId || null, _items: items, _payments: payments, _discount: totals.discount, _notes: null };
+      // create_pos_sale checks who may change prices and the minimum price, and logs every change.
+      let { data, error } = await (supabase.rpc as any)("create_pos_sale", args);
+      if (error && (error.code === "PGRST202" || /create_pos_sale/.test(error.message ?? ""))) {
+        // Older database without the B2B update: only plain prices can be sold.
+        const changedPrice = cart.some((l) => l.list_price != null && Math.abs(l.unit_price - l.list_price) > 0.004);
+        if (changedPrice) throw new Error("Price changes need the latest database update (B2B SQL). Ask the admin to run it.");
+        ({ data, error } = await (supabase.rpc as any)("create_sale", args));
+      }
       if (error) throw error;
       const rpc = data as { sale_id: string; invoice_no: string; total: number; paid: number; due: number };
       const ownerObj = ownerId ? owners.find((o) => o.id === ownerId) ?? null : null;
@@ -1134,6 +1196,11 @@ function POSPage() {
       </div>
 
       {ownerId && <DeliveryRiskBadge phone={owners.find((o) => o.id === ownerId)?.phone} />}
+      {isB2b && (
+        <p className="rounded-md border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs text-violet-900 dark:bg-violet-950/30 dark:text-violet-200">
+          <b>B2B / Wholesale</b> — wholesale prices{canEditPrice ? "; you can change price and discount on each line." : "."}
+        </p>
+      )}
 
       {resumedBill && (
         <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -1161,7 +1228,47 @@ function POSPage() {
                 <div className="flex items-start gap-2">
                   <div className="min-w-0 flex-1">
                     <p className="line-clamp-2 text-sm font-medium leading-snug">{l.name.trim()}</p>
-                    <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">৳ {l.unit_price.toFixed(2)} each</p>
+                    {canEditPrice ? (
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+                        <label className="flex items-center gap-1">
+                          <span className="text-muted-foreground">Price</span>
+                          <Input
+                            aria-label={`Price for ${l.name.trim()}`}
+                            inputMode="decimal"
+                            className={`h-7 w-20 px-1.5 text-right text-xs tabular-nums ${belowMin(l) ? "border-destructive text-destructive" : ""}`}
+                            defaultValue={String(l.unit_price)}
+                            key={`p-${l.product_id}-${l.list_price}`}
+                            onFocus={(e) => e.currentTarget.select()}
+                            onChange={(e) => setLinePrice(l.product_id, e.target.value.replace(/[^0-9.]/g, ""))}
+                          />
+                        </label>
+                        <label className="flex items-center gap-1">
+                          <span className="text-muted-foreground">Disc</span>
+                          <Input
+                            aria-label={`Discount for ${l.name.trim()}`}
+                            inputMode="decimal"
+                            className="h-7 w-16 px-1.5 text-right text-xs tabular-nums"
+                            value={l.discount ? String(l.discount) : ""}
+                            placeholder="0"
+                            onFocus={(e) => e.currentTarget.select()}
+                            onChange={(e) => setLineDiscount(l.product_id, e.target.value.replace(/[^0-9.]/g, ""))}
+                          />
+                        </label>
+                      </div>
+                    ) : (
+                      <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">
+                        ৳ {l.unit_price.toFixed(2)} each{l.discount > 0 ? ` · disc ৳ ${l.discount.toFixed(2)}` : ""}
+                        {isB2b && l.list_price != null && !l.price_edited ? " · wholesale" : ""}
+                      </p>
+                    )}
+                    {l.list_price != null && Math.abs(l.unit_price - l.list_price) > 0.004 && (
+                      <p className="mt-0.5 text-[11px] text-amber-700">Changed from ৳ {l.list_price.toFixed(2)}</p>
+                    )}
+                    {belowMin(l) && (
+                      <p className="mt-0.5 text-[11px] font-medium text-destructive">
+                        Below minimum ৳ {Number(l.min_price).toFixed(2)}{isAdmin ? " — admin override" : " — only an admin can sell lower"}
+                      </p>
+                    )}
                   </div>
                   <span className="pt-0.5 text-sm font-semibold tabular-nums">৳ {(l.unit_price * l.quantity - l.discount).toFixed(2)}</span>
                 </div>

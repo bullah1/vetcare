@@ -30,19 +30,25 @@ export const MODULES: ModuleDef[] = [
 
   { key: "accounts", label: "Accounts", url: "/accounts", group: "Business" },
   { key: "business_report", label: "Business Report", url: "/business-report", group: "Business" },
+  { key: "product_sales", label: "Product Sales", url: "/product-sales", group: "Business" },
   { key: "reports", label: "Reports", url: "/reports", group: "Business" },
   { key: "crm", label: "CRM", url: "/crm", group: "Business" },
   { key: "staff", label: "Staff & Permissions", url: "/staff", group: "Business" },
   { key: "settings", label: "Settings", url: "/settings", group: "Business" },
 ];
 
-export const PERMISSION_KEYS = MODULES.map((m) => m.key);
+/** Permissions that are not a page (special actions). */
+export const ACTION_PERMISSIONS: { key: string; label: string; hint: string }[] = [
+  { key: "price_override", label: "Change prices in POS", hint: "B2B / wholesale bills. Below the minimum price still needs an admin." },
+];
+
+export const PERMISSION_KEYS = [...MODULES.map((m) => m.key), ...ACTION_PERMISSIONS.map((a) => a.key)];
 
 /** Modules only an admin may ever access, regardless of granted permissions. */
 export const ADMIN_ONLY_KEYS = ["staff"];
 
 /** A permission that is also granted by another one (older users keep access). */
-export const IMPLIED_BY: Record<string, string> = { delivery_report: "deliveries", clinic_bill: "appointments" };
+export const IMPLIED_BY: Record<string, string> = { delivery_report: "deliveries", clinic_bill: "appointments", product_sales: "reports" };
 
 /** Map a pathname to the permission that guards it. */
 export function permissionForPath(pathname: string): string | null {
@@ -59,5 +65,5 @@ export const ROLE_PRESETS: Record<string, string[]> = {
   reception: ["dashboard", "clinic_dashboard", "appointments", "clinic_bill", "appointment_history", "pets", "receivables", "crm", "pending_bills", "due_bills"],
   cashier: ["dashboard", "pos", "sales_history", "cash_drawer", "reconciliation", "receivables", "pending_bills", "due_bills", "deliveries", "delivery_report"],
   pharmacy: ["dashboard", "pos", "inventory", "prescriptions", "adjustments"],
-  store_manager: ["dashboard", "inventory", "purchases", "adjustments", "reports"],
+  store_manager: ["dashboard", "inventory", "purchases", "adjustments", "reports", "product_sales"],
 };

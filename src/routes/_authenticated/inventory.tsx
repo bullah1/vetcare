@@ -558,6 +558,10 @@ function ProductDialog({ product, onDone }: { product: Product | null; onDone: (
     dose_form: inferDoseForm(product?.name) ?? (product as any)?.dose_form ?? "tablet",
     dose_unit: (product as any)?.dose_unit ?? "",
   });
+  // B2B prices are saved separately so an older database without these columns still saves the product.
+  const hasB2bCols = !product || "wholesale_price" in (product as any);
+  const [wholesale, setWholesale] = useState<string>((product as any)?.wholesale_price != null ? String((product as any).wholesale_price) : "");
+  const [minPrice, setMinPrice] = useState<string>((product as any)?.min_selling_price != null ? String((product as any).min_selling_price) : "");
 
   const save = useMutation({
     mutationFn: async () => {
@@ -568,12 +572,24 @@ function ProductDialog({ product, onDone }: { product: Product | null; onDone: (
         dose_form: form.is_prescribable ? form.dose_form : null,
         dose_unit: form.is_prescribable && form.dose_unit.trim() ? form.dose_unit.trim() : null,
       };
+      const w = wholesale.trim() === "" ? null : Number(wholesale);
+      const mn = minPrice.trim() === "" ? null : Number(minPrice);
+      if (w != null && !(w >= 0)) throw new Error("Wholesale price must be 0 or more");
+      if (mn != null && !(mn >= 0)) throw new Error("Minimum price must be 0 or more");
+      if (mn != null && mn > Number(form.selling_price)) throw new Error("Minimum price cannot be more than the selling price");
+      let id = product?.id ?? null;
       if (product) {
         const { error } = await supabase.from("products").update(payload).eq("id", product.id);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("products").insert(payload);
+        const { data, error } = await supabase.from("products").insert(payload).select("id").single();
         if (error) throw error;
+        id = data.id;
+      }
+      const changed = w !== ((product as any)?.wholesale_price ?? null) || mn !== ((product as any)?.min_selling_price ?? null);
+      if (id && hasB2bCols && changed) {
+        const { error } = await (supabase as any).from("products").update({ wholesale_price: w, min_selling_price: mn }).eq("id", id);
+        if (error) throw new Error(`Product saved, but wholesale / minimum price was not: ${error.message}`);
       }
     },
     onSuccess: () => {
@@ -679,6 +695,19 @@ function ProductDialog({ product, onDone }: { product: Product | null; onDone: (
           <Label>Selling price</Label>
           <Input type="number" step="0.01" value={form.selling_price} onChange={(e) => setForm({ ...form, selling_price: Number(e.target.value) })} />
         </div>
+        {hasB2bCols && (
+          <>
+            <div className="space-y-2">
+              <Label>Wholesale price (B2B)</Label>
+              <Input type="number" step="0.01" value={wholesale} onChange={(e) => setWholesale(e.target.value)} placeholder="Same as selling price" />
+            </div>
+            <div className="space-y-2">
+              <Label>Minimum selling price</Label>
+              <Input type="number" step="0.01" value={minPrice} onChange={(e) => setMinPrice(e.target.value)} placeholder="No minimum" />
+              <p className="text-[11px] text-muted-foreground">Below this, only an admin can sell.</p>
+            </div>
+          </>
+        )}
         <div className="space-y-2">
           <Label>Tax %</Label>
           <Input type="number" step="0.01" value={form.tax_percent} onChange={(e) => setForm({ ...form, tax_percent: Number(e.target.value) })} />

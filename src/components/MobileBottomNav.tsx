@@ -24,6 +24,7 @@ import {
   PackageCheck,
   LineChart,
   ReceiptText,
+  PackageSearch,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,7 @@ const ICONS: Record<string, typeof Users> = {
   dashboard: LayoutDashboard,
   appointments: CalendarDays,
   clinic_bill: ReceiptText,
+  product_sales: PackageSearch,
   pets: PawPrint,
   medical: Stethoscope,
   prescriptions: Pill,

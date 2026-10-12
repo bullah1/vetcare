@@ -4,7 +4,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useMemo, useState } from "react";
 import { ShieldCheck, UserPlus, KeyRound, Trash2, Save } from "lucide-react";
 import { useAuth, type AppRole } from "@/lib/auth-context";
-import { MODULES, ROLE_PRESETS, PERMISSION_KEYS } from "@/lib/permissions";
+import { ACTION_PERMISSIONS, MODULES, ROLE_PRESETS, PERMISSION_KEYS } from "@/lib/permissions";
 import {
   listAppUsers,
   createAppUser,
@@ -74,6 +74,17 @@ function PermissionMatrix({
           </div>
         </div>
       ))}
+      <div className="rounded-lg border p-3 sm:col-span-2">
+        <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Special actions</p>
+        <div className="space-y-2">
+          {ACTION_PERMISSIONS.map((a) => (
+            <label key={a.key} className="flex items-start gap-2 text-sm">
+              <Checkbox className="mt-0.5" checked={value.includes(a.key)} onCheckedChange={() => toggle(a.key)} disabled={disabled} />
+              <span>{a.label}<span className="block text-xs text-muted-foreground">{a.hint}</span></span>
+            </label>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

@@ -33,6 +33,8 @@ export function CustomerEditDialog({ customer, open, onOpenChange, onSaved }: Pr
   const [email, setEmail] = useState("");
   const [address, setAddress] = useState("");
   const [notes, setNotes] = useState("");
+  const [ctype, setCtype] = useState<"retail" | "b2b">("retail");
+  const [ctypeLoaded, setCtypeLoaded] = useState(false);
 
   useEffect(() => {
     if (!customer) return;
@@ -42,6 +44,12 @@ export function CustomerEditDialog({ customer, open, onOpenChange, onSaved }: Pr
     setEmail(customer.email ?? "");
     setAddress(customer.address ?? "");
     setNotes(customer.notes ?? "");
+    setCtypeLoaded(false);
+    // Read separately so older databases without the column still work.
+    (supabase as any).from("pet_owners").select("customer_type").eq("id", customer.id).maybeSingle()
+      .then(({ data, error }: any) => {
+        if (!error) { setCtype(data?.customer_type === "b2b" ? "b2b" : "retail"); setCtypeLoaded(true); }
+      });
   }, [customer?.id, open]);
 
   const save = useMutation({
@@ -61,6 +69,10 @@ export function CustomerEditDialog({ customer, open, onOpenChange, onSaved }: Pr
         })
         .eq("id", customer.id);
       if (error) throw error;
+      if (ctypeLoaded) {
+        const { error: tErr } = await (supabase as any).from("pet_owners").update({ customer_type: ctype }).eq("id", customer.id);
+        if (tErr) throw new Error(`Saved, but customer type was not saved: ${tErr.message}`);
+      }
     },
     onSuccess: () => {
       toast.success("Customer details updated");
@@ -105,6 +117,16 @@ export function CustomerEditDialog({ customer, open, onOpenChange, onSaved }: Pr
               ))}
             </div>
           </div>
+          {ctypeLoaded && (
+            <div className="space-y-2">
+              <Label>Customer type</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <Button type="button" variant={ctype === "retail" ? "default" : "outline"} onClick={() => setCtype("retail")}>Retail</Button>
+                <Button type="button" variant={ctype === "b2b" ? "default" : "outline"} onClick={() => setCtype("b2b")}>B2B / Wholesale</Button>
+              </div>
+              {ctype === "b2b" && <p className="text-xs text-muted-foreground">POS uses the wholesale price for this customer, and allowed users can change prices on the bill.</p>}
+            </div>
+          )}
           <div className="space-y-2">
             <Label>Address</Label>
             <Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="optional" />

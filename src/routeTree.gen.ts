@@ -33,6 +33,7 @@ import { Route as AuthenticatedPendingBillsRouteImport } from './routes/_authent
 import { Route as AuthenticatedPetsRouteImport } from './routes/_authenticated/pets'
 import { Route as AuthenticatedPosRouteImport } from './routes/_authenticated/pos'
 import { Route as AuthenticatedPrescriptionsRouteImport } from './routes/_authenticated/prescriptions'
+import { Route as AuthenticatedProductSalesRouteImport } from './routes/_authenticated/product-sales'
 import { Route as AuthenticatedPurchasesRouteImport } from './routes/_authenticated/purchases'
 import { Route as AuthenticatedReceivablesRouteImport } from './routes/_authenticated/receivables'
 import { Route as AuthenticatedReconciliationRouteImport } from './routes/_authenticated/reconciliation'
@@ -172,6 +173,12 @@ const AuthenticatedPrescriptionsRoute =
     path: '/prescriptions',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedProductSalesRoute =
+  AuthenticatedProductSalesRouteImport.update({
+    id: '/product-sales',
+    path: '/product-sales',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedPurchasesRoute = AuthenticatedPurchasesRouteImport.update({
   id: '/purchases',
   path: '/purchases',
@@ -246,6 +253,7 @@ export interface FileRoutesByFullPath {
   '/pets': typeof AuthenticatedPetsRoute
   '/pos': typeof AuthenticatedPosRoute
   '/prescriptions': typeof AuthenticatedPrescriptionsRoute
+  '/product-sales': typeof AuthenticatedProductSalesRoute
   '/purchases': typeof AuthenticatedPurchasesRoute
   '/receivables': typeof AuthenticatedReceivablesRoute
   '/reconciliation': typeof AuthenticatedReconciliationRoute
@@ -280,6 +288,7 @@ export interface FileRoutesByTo {
   '/pets': typeof AuthenticatedPetsRoute
   '/pos': typeof AuthenticatedPosRoute
   '/prescriptions': typeof AuthenticatedPrescriptionsRoute
+  '/product-sales': typeof AuthenticatedProductSalesRoute
   '/purchases': typeof AuthenticatedPurchasesRoute
   '/receivables': typeof AuthenticatedReceivablesRoute
   '/reconciliation': typeof AuthenticatedReconciliationRoute
@@ -316,6 +325,7 @@ export interface FileRoutesById {
   '/_authenticated/pets': typeof AuthenticatedPetsRoute
   '/_authenticated/pos': typeof AuthenticatedPosRoute
   '/_authenticated/prescriptions': typeof AuthenticatedPrescriptionsRoute
+  '/_authenticated/product-sales': typeof AuthenticatedProductSalesRoute
   '/_authenticated/purchases': typeof AuthenticatedPurchasesRoute
   '/_authenticated/receivables': typeof AuthenticatedReceivablesRoute
   '/_authenticated/reconciliation': typeof AuthenticatedReconciliationRoute
@@ -352,6 +362,7 @@ export interface FileRouteTypes {
     | '/pets'
     | '/pos'
     | '/prescriptions'
+    | '/product-sales'
     | '/purchases'
     | '/receivables'
     | '/reconciliation'
@@ -386,6 +397,7 @@ export interface FileRouteTypes {
     | '/pets'
     | '/pos'
     | '/prescriptions'
+    | '/product-sales'
     | '/purchases'
     | '/receivables'
     | '/reconciliation'
@@ -421,6 +433,7 @@ export interface FileRouteTypes {
     | '/_authenticated/pets'
     | '/_authenticated/pos'
     | '/_authenticated/prescriptions'
+    | '/_authenticated/product-sales'
     | '/_authenticated/purchases'
     | '/_authenticated/receivables'
     | '/_authenticated/reconciliation'
@@ -609,6 +622,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedPrescriptionsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/product-sales': {
+      id: '/_authenticated/product-sales'
+      path: '/product-sales'
+      fullPath: '/product-sales'
+      preLoaderRoute: typeof AuthenticatedProductSalesRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/purchases': {
       id: '/_authenticated/purchases'
       path: '/purchases'
@@ -697,6 +717,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedPetsRoute: typeof AuthenticatedPetsRoute
   AuthenticatedPosRoute: typeof AuthenticatedPosRoute
   AuthenticatedPrescriptionsRoute: typeof AuthenticatedPrescriptionsRoute
+  AuthenticatedProductSalesRoute: typeof AuthenticatedProductSalesRoute
   AuthenticatedPurchasesRoute: typeof AuthenticatedPurchasesRoute
   AuthenticatedReceivablesRoute: typeof AuthenticatedReceivablesRoute
   AuthenticatedReconciliationRoute: typeof AuthenticatedReconciliationRoute
@@ -730,6 +751,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedPetsRoute: AuthenticatedPetsRoute,
   AuthenticatedPosRoute: AuthenticatedPosRoute,
   AuthenticatedPrescriptionsRoute: AuthenticatedPrescriptionsRoute,
+  AuthenticatedProductSalesRoute: AuthenticatedProductSalesRoute,
   AuthenticatedPurchasesRoute: AuthenticatedPurchasesRoute,
   AuthenticatedReceivablesRoute: AuthenticatedReceivablesRoute,
   AuthenticatedReconciliationRoute: AuthenticatedReconciliationRoute,
