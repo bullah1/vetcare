@@ -614,10 +614,10 @@ function POSPage() {
   // ---- Keyboard-first desktop flow -------------------------------------------
   // Search → Enter → Qty → Enter → (repeat) → empty Enter → Customer → Enter →
   // Paid → Enter (bill saved) → Enter (print) → Enter (new sale).
-  // -1 = nothing highlighted. A card is only highlighted after the arrow keys
-  // are used; Enter without arrows still adds the best match.
+  // While typing, only the single closest match is marked (the one Enter takes);
+  // the arrow keys move the mark. Nothing is marked when the box is empty.
   const [hi, setHi] = useState(-1);
-  useEffect(() => setHi(-1), [deferredQ]);
+  useEffect(() => setHi(deferredQ.trim() ? 0 : -1), [deferredQ]);
   const [qtyFor, setQtyFor] = useState<Product | null>(null);
   const [qtyText, setQtyText] = useState("1");
   const qtyRef = useRef<HTMLInputElement>(null);
@@ -696,7 +696,11 @@ function POSPage() {
   const openQty = (p: Product) => {
     setQtyFor(p);
     setQtyText("1");
-    setTimeout(() => { qtyRef.current?.focus(); qtyRef.current?.select(); }, 0);
+  };
+  const closeQty = () => {
+    setQtyFor(null);
+    // Old text is selected, so the next letters typed replace it.
+    setTimeout(() => { searchRef.current?.focus(); searchRef.current?.select(); }, 0);
   };
 
   const confirmQty = () => {
@@ -707,6 +711,7 @@ function POSPage() {
     setQtyFor(null);
     setQ("");
     focusSearch();
+    if (!isDesktop()) setCartOpen(true);
   };
 
   const handleScanKey = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -776,13 +781,7 @@ function POSPage() {
       toast.error(`No product for "${typed.trim()}"`);
       return;
     }
-    if (isDesktop()) {
-      openQty(pick); // Product → Enter → Quantity → Enter
-    } else {
-      addToCart(pick);
-      setQ("");
-      setCartOpen(true);
-    }
+    openQty(pick); // Product → Enter → Quantity pop-up → Enter
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanMaps, addToCart, deferredQ, cart.length, searchProducts]);
 
@@ -1423,6 +1422,7 @@ function POSPage() {
               placeholder="Scan barcode or search product…"
               value={q}
               onChange={(e) => setQ(e.target.value)}
+              onFocus={(e) => e.currentTarget.select()}
               onKeyDown={handleScanKey}
               className="h-12 w-full min-w-0 rounded-xl bg-card pl-10 pr-16 text-base shadow-sm sm:h-11 sm:text-sm"
             />
@@ -1439,34 +1439,9 @@ function POSPage() {
               </button>
             )}
             </div>
-            {desktop && qtyFor && (
-              <div className="mt-2 flex items-center gap-3 rounded-lg border-2 border-primary bg-primary/5 p-2.5">
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold">{qtyFor.name.trim()}</p>
-                  <p className="text-xs text-muted-foreground">
-                    ৳ {Number(qtyFor.selling_price).toFixed(2)} · Stock {Number(qtyFor.stock_quantity)}{qtyFor.unit ? ` ${qtyFor.unit}` : ""}
-                    {cart.find((l) => l.product_id === qtyFor.id) ? ` · already ${cart.find((l) => l.product_id === qtyFor.id)!.quantity} in cart (will add)` : ""}
-                  </p>
-                </div>
-                <Label htmlFor="pos-qty" className="text-xs">Qty</Label>
-                <Input
-                  id="pos-qty"
-                  ref={qtyRef}
-                  inputMode="numeric"
-                  value={qtyText}
-                  onChange={(e) => setQtyText(e.target.value.replace(/[^0-9]/g, ""))}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") { e.preventDefault(); confirmQty(); }
-                    if (e.key === "Escape") { e.preventDefault(); setQtyFor(null); focusSearch(); }
-                  }}
-                  className="h-10 w-20 text-center text-base font-semibold tabular-nums"
-                />
-                <Button size="sm" onClick={confirmQty}>Add</Button>
-              </div>
-            )}
-            {desktop && !qtyFor && (
+            {desktop && (
               <p className="mt-1.5 px-1 text-[11px] text-muted-foreground/80">
-                Enter adds the best match · ↑ ↓ to choose · empty Enter or F4 for customer · F9 to pay
+                Enter opens the marked product · ↑ ↓ to choose · empty Enter or F4 for customer · F9 to pay
               </p>
             )}
           </div>
@@ -1475,7 +1450,7 @@ function POSPage() {
           )}
           <div data-pos-grid className="grid min-w-0 auto-rows-fr grid-cols-2 gap-2.5 md:grid-cols-3 2xl:grid-cols-4">
             {filtered.map(({ p, ranges }, i) => (
-              <ProductCard key={p.id} p={p} ranges={ranges} onAdd={addToCart} active={desktop && i === hi} />
+              <ProductCard key={p.id} p={p} ranges={ranges} onAdd={addToCart} active={i === hi} />
             ))}
             {filtered.length === 0 && (
               <div className="col-span-full rounded-xl border border-dashed py-10 text-center text-sm text-muted-foreground">
@@ -1704,6 +1679,62 @@ function POSPage() {
               </button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Quantity pop-up: Enter on a product → type qty (1 is pre-selected) → Enter / Add */}
+      <Dialog open={!!qtyFor} onOpenChange={(o) => { if (!o) closeQty(); }}>
+        <DialogContent
+          className="max-w-sm"
+          onOpenAutoFocus={(e) => { e.preventDefault(); setTimeout(() => { qtyRef.current?.focus(); qtyRef.current?.select(); }, 0); }}
+          onCloseAutoFocus={(e) => e.preventDefault()}
+        >
+          {qtyFor && (() => {
+            const inCart = cart.find((l) => l.product_id === qtyFor.id)?.quantity ?? 0;
+            const n = Math.max(0, Math.floor(Number(qtyText) || 0));
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="pr-6 leading-snug">{qtyFor.name.trim()}</DialogTitle>
+                </DialogHeader>
+                <p className="-mt-2 text-sm text-muted-foreground">
+                  ৳ {Number(qtyFor.selling_price).toFixed(2)} · Stock {Number(qtyFor.stock_quantity)}{qtyFor.unit ? ` ${qtyFor.unit}` : ""}
+                  {inCart > 0 ? ` · ${inCart} already in cart` : ""}
+                </p>
+                <div className="flex items-center justify-center gap-2 py-2">
+                  <Button type="button" variant="outline" size="icon" className="h-12 w-12" aria-label="Less" onClick={() => setQtyText(String(Math.max(1, n - 1)))}>
+                    <Minus className="h-4 w-4" />
+                  </Button>
+                  <Input
+                    id="pos-qty"
+                    ref={qtyRef}
+                    aria-label="Quantity"
+                    inputMode="numeric"
+                    value={qtyText}
+                    onFocus={(e) => e.currentTarget.select()}
+                    onChange={(e) => setQtyText(e.target.value.replace(/[^0-9]/g, ""))}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { e.preventDefault(); confirmQty(); }
+                    }}
+                    className="h-12 w-24 text-center text-2xl font-bold tabular-nums"
+                  />
+                  <Button type="button" variant="outline" size="icon" className="h-12 w-12" aria-label="More" onClick={() => setQtyText(String(n + 1))}>
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+                {n > 0 && (
+                  <p className="text-center text-sm text-muted-foreground">
+                    Line total <span className="font-semibold text-foreground tabular-nums">৳ {(n * Number(qtyFor.selling_price)).toFixed(2)}</span>
+                    {Number(qtyFor.stock_quantity) < n + inCart ? <span className="text-destructive"> · more than stock</span> : null}
+                  </p>
+                )}
+                <DialogFooter className="grid grid-cols-[auto_1fr] gap-2 sm:grid-cols-[auto_1fr]">
+                  <Button type="button" variant="outline" onClick={closeQty}>Cancel</Button>
+                  <Button type="button" className="h-11 text-base" onClick={confirmQty} disabled={!(n > 0)}>Add to bill</Button>
+                </DialogFooter>
+              </>
+            );
+          })()}
         </DialogContent>
       </Dialog>
 
