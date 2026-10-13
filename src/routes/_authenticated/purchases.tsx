@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { Truck, Plus, Trash2, Eye, RotateCcw, Wallet, Printer, X, Barcode } from "lucide-react";
+import { Truck, Plus, Trash2, Eye, RotateCcw, Wallet, Printer, X, Barcode, Upload } from "lucide-react";
+import { PurchaseImportDialog, type ImportedLine } from "@/components/PurchaseImportDialog";
 import { BarcodeLabelDialog, type LabelProduct } from "@/components/BarcodeLabelDialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/PageHeader";
@@ -131,6 +132,7 @@ type Invoice = {
 function PurchasesPage() {
   const qc = useQueryClient();
   const [openCreate, setOpenCreate] = useState(false);
+  const [startUpload, setStartUpload] = useState(false);
   const [viewId, setViewId] = useState<string | null>(null);
   const [returnFor, setReturnFor] = useState<string | null>(null);
   const [payFor, setPayFor] = useState<Invoice | null>(null);
@@ -201,9 +203,14 @@ function PurchasesPage() {
         description="Supplier invoices, stock receipts & payables"
         icon={Truck}
         actions={
-          <Button onClick={() => setOpenCreate(true)}>
-            <Plus className="h-4 w-4 mr-1" /> New Purchase Invoice
-          </Button>
+          <>
+            <Button variant="outline" onClick={() => { setStartUpload(true); setOpenCreate(true); }}>
+              <Upload className="h-4 w-4 mr-1" /> Upload Excel
+            </Button>
+            <Button onClick={() => { setStartUpload(false); setOpenCreate(true); }}>
+              <Plus className="h-4 w-4 mr-1" /> New Purchase Invoice
+            </Button>
+          </>
         }
       />
 
@@ -325,6 +332,7 @@ function PurchasesPage() {
           onOpenChange={setOpenCreate}
           suppliers={suppliers}
           products={products}
+          startWithUpload={startUpload}
           onCreated={(created) => {
             if (created?.id) setLabelFor({ id: created.id, invoice_no: created.invoice_no ?? "" });
             qc.invalidateQueries({ queryKey: ["purchase_invoices"] });
@@ -400,11 +408,19 @@ const emptyRow = (): Row => ({
 });
 
 function CreateInvoiceDialog({
-  open, onOpenChange, suppliers, products, onCreated,
+  open, onOpenChange, suppliers, products, onCreated, startWithUpload = false,
 }: {
   open: boolean; onOpenChange: (v: boolean) => void;
   suppliers: Supplier[]; products: Product[]; onCreated: (created?: { id: string; invoice_no?: string }) => void;
+  startWithUpload?: boolean;
 }) {
+  const qcInv = useQueryClient();
+  const [uploadOpen, setUploadOpen] = useState(startWithUpload);
+  const applyUpload = async (lines: ImportedLine[], created: number) => {
+    // New products must be in the list before their rows can show a name.
+    if (created) await qcInv.refetchQueries({ queryKey: ["products-purchase"] });
+    setRows((prev) => [...prev.filter((r) => r.product_id), ...lines]);
+  };
   const [supplierId, setSupplierId] = useState<string>("");
   const [supplierInvoiceNo, setSupplierInvoiceNo] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(today());
@@ -565,6 +581,12 @@ function CreateInvoiceDialog({
               placeholder="Scan / type barcode then Enter…"
             />
           </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">Have the supplier&apos;s list in Excel? Upload it — you will see and edit every row before it is added.</p>
+            <Button type="button" size="sm" variant="outline" className="bg-background" onClick={() => setUploadOpen(true)}>
+              <Upload className="h-4 w-4 mr-1" /> Upload Excel / CSV
+            </Button>
+          </div>
           <div>
             <Label className="mb-1 block text-xs">Quick add product (search by name / SKU / barcode)</Label>
             <ProductPicker
@@ -672,6 +694,8 @@ function CreateInvoiceDialog({
             <Row2 label="Due" value={fmt(due)} danger />
           </div>
         </div>
+
+        <PurchaseImportDialog open={uploadOpen} onOpenChange={setUploadOpen} products={products} onApply={applyUpload} />
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
