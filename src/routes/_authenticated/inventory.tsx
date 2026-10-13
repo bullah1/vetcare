@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Package, Plus, Search, AlertTriangle, Truck, PackagePlus, Printer, Wand2, ClipboardEdit, FileDown, Trash2 } from "lucide-react";
+import { Package, Plus, Search, AlertTriangle, Truck, PackagePlus, Printer, Wand2, ClipboardEdit, FileDown, Trash2, Upload } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -31,6 +31,7 @@ import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ProductImageUpload, resolveProductImageUrl } from "@/components/ProductImageUpload";
 import { StockCountDialog } from "@/components/StockCountDialog";
+import { ProductImportDialog } from "@/components/ProductImportDialog";
 import { BarcodeLabelDialog, type LabelProduct } from "@/components/BarcodeLabelDialog";
 import { printLabelsBatch } from "@/lib/barcode-labels";
 import { refreshAppData } from "@/lib/refresh-data";
@@ -120,6 +121,7 @@ function ProductsTab() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
   const [countOpen, setCountOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [deleting, setDeleting] = useState<Product | null>(null);
   const { hasRole } = useAuth();
   const isAdmin = hasRole("admin");
@@ -271,6 +273,10 @@ function ProductsTab() {
         >
           <FileDown className="h-4 w-4" /> Excel
         </Button>
+        <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
+          <Upload className="h-4 w-4" /> Upload products
+        </Button>
+        <ProductImportDialog open={importOpen} onOpenChange={setImportOpen} existing={products as any[]} />
         <Button variant="outline" size="sm" onClick={() => setCountOpen(true)}>
           <ClipboardEdit className="h-4 w-4" /> Stock Adjustment
         </Button>
