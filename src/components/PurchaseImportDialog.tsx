@@ -31,7 +31,7 @@ const ALIASES: Record<string, Head> = {
   barcode: "Barcode", "bar code": "Barcode",
   category: "Category", type: "Category",
   unit: "Unit",
-  qty: "Qty", quantity: "Qty", "purchase qty": "Qty", "পরিমাণ": "Qty",
+  qty: "Qty", quantity: "Qty", "purchase qty": "Qty", stock: "Qty", "stock value": "Qty", "current stock": "Qty", "opening stock": "Qty", "stock qty": "Qty", "পরিমাণ": "Qty",
   "cost price": "Cost price", cost: "Cost price", "purchase price": "Cost price", "buying price": "Cost price", tp: "Cost price", rate: "Cost price", "unit cost": "Cost price", "ক্রয়মূল্য": "Cost price",
   "selling price": "Selling price", "sell price": "Selling price", mrp: "Selling price", price: "Selling price", "new sell": "Selling price", "বিক্রয়মূল্য": "Selling price",
   "line discount": "Line discount", discount: "Line discount", disc: "Line discount",
@@ -61,6 +61,14 @@ const toDate = (v: unknown): string => {
   return s;
 };
 const numStr = (v: unknown) => String(v ?? "").replace(/[,৳\s]/g, "").replace(/tk/i, "");
+/** "5 PC", "12 pcs" → "5" and unit. */
+const qtyUnit = (v: unknown): { qty: string; unit: string } => {
+  if (typeof v === "number") return { qty: String(v), unit: "" };
+  const m = String(v ?? "").replace(/,/g, "").match(/^\s*(-?\d+(?:\.\d+)?)\s*([A-Za-z]*)/);
+  if (!m) return { qty: numStr(v), unit: "" };
+  const u = m[2].toLowerCase();
+  return { qty: m[1], unit: !u ? "" : ["pc", "pcs", "piece", "pieces"].includes(u) ? "pcs" : u };
+};
 
 type Line = {
   id: string; line: number;
@@ -104,6 +112,9 @@ export function PurchaseImportDialog({
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState("");
+  const wbRef = useRef<XLSX.WorkBook | null>(null);
+  const [sheetNames, setSheetNames] = useState<string[]>([]);
+  const [sheet, setSheet] = useState("");
   const [lines, setLines] = useState<Line[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -181,7 +192,7 @@ export function PurchaseImportDialog({
   }, [lines]);
 
   const set = (id: string, patch: Partial<Line>) => setLines((ls) => ls.map((l) => (l.id === id ? { ...l, ...patch } : l)));
-  const reset = () => { setLines([]); setFileName(""); if (fileRef.current) fileRef.current.value = ""; };
+  const reset = () => { setLines([]); setFileName(""); setSheetNames([]); setSheet(""); wbRef.current = null; if (fileRef.current) fileRef.current.value = ""; };
 
   const mergeDuplicates = () => {
     setLines((ls) => {
@@ -208,7 +219,20 @@ export function PurchaseImportDialog({
   const readFile = async (file: File) => {
     try {
       const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
+      wbRef.current = wb;
+      setSheetNames(wb.SheetNames);
+      if (!parseSheet(wb, wb.SheetNames[0])) { reset(); return; }
+      setFileName(file.name);
+    } catch (e: any) {
+      toast.error(e?.message ?? "Could not read the file");
+      reset();
+    }
+  };
+
+  const parseSheet = (wb: XLSX.WorkBook, sheetName: string): boolean => {
+    setSheet(sheetName);
+    try {
+      const ws = wb.Sheets[sheetName];
       const grid = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: "", blankrows: false, raw: true }) as unknown[][];
       if (!grid.length) throw new Error("The file is empty");
       const mapped = grid[0].map((h) => normHead(String(h ?? "")));
@@ -216,23 +240,29 @@ export function PurchaseImportDialog({
         if (!mapped.includes(need)) throw new Error(`No "${need}" column found. Download the template to see the columns.`);
       }
       const out: Line[] = [];
+      let skipped = 0;
       grid.slice(1).forEach((cells, i) => {
         if (cells.every((c) => String(c ?? "").trim() === "")) return;
         const get = (k: Head) => { const j = mapped.indexOf(k); return j >= 0 ? cells[j] : ""; };
         const str = (k: Head) => String(get(k) ?? "").trim();
+        const q = qtyUnit(get("Qty"));
+        // Nothing to buy: 0 or minus quantity (e.g. a stock list with minus stock).
+        if (q.qty !== "" && Number(q.qty) <= 0) { skipped++; return; }
         out.push({
           id: uid(), line: i + 2, name: str("Name"), sku: str("SKU"), barcode: str("Barcode"),
-          category: toCat(str("Category")), unit: str("Unit") || "pcs",
-          qty: numStr(get("Qty")), cost: numStr(get("Cost price")), sell: numStr(get("Selling price")), disc: numStr(get("Line discount")),
+          category: toCat(str("Category")), unit: str("Unit") || q.unit || "pcs",
+          qty: q.qty, cost: numStr(get("Cost price")), sell: numStr(get("Selling price")), disc: numStr(get("Line discount")),
           batch: str("Batch"), expiry: toDate(get("Expiry")), pick: "auto",
         });
       });
-      if (!out.length) throw new Error("No rows found under the header");
+      if (!out.length) throw new Error(skipped ? `All ${skipped} rows have 0 or minus quantity — nothing to buy` : "No rows found under the header");
+      if (skipped) toast.info(`${skipped} row${skipped > 1 ? "s" : ""} with 0 or minus quantity left out`);
       setLines(out);
-      setFileName(file.name);
+      return true;
     } catch (e: any) {
-      toast.error(e?.message ?? "Could not read the file");
-      reset();
+      toast.error(`${sheetName}: ${e?.message ?? "Could not read the sheet"}`);
+      setLines([]);
+      return false;
     }
   };
 
@@ -310,6 +340,14 @@ export function PurchaseImportDialog({
           </div>
         ) : (
           <div className="space-y-3">
+            {sheetNames.length > 1 && (
+              <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+                <span className="text-muted-foreground">This file has {sheetNames.length} sheets. Use:</span>
+                {sheetNames.map((n) => (
+                  <Button key={n} size="sm" variant={n === sheet ? "default" : "outline"} className="h-7" onClick={() => wbRef.current && parseSheet(wbRef.current, n)}>{n}</Button>
+                ))}
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <span className="font-medium">{fileName}</span>
               <Badge variant="secondary">{counts.total} rows</Badge>

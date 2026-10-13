@@ -48,7 +48,7 @@ const ALIASES: Record<string, (typeof HEADERS)[number]> = {
   "wholesale price": "Wholesale price", wholesale: "Wholesale price", "b2b price": "Wholesale price",
   "minimum price": "Minimum price", "min price": "Minimum price", "minimum selling price": "Minimum price",
   "tax %": "Tax %", tax: "Tax %", vat: "Tax %", "vat %": "Tax %",
-  "opening stock": "Opening stock", stock: "Opening stock", qty: "Opening stock", quantity: "Opening stock", "স্টক": "Opening stock",
+  "opening stock": "Opening stock", stock: "Opening stock", "stock value": "Opening stock", "current stock": "Opening stock", "stock qty": "Opening stock", "in stock": "Opening stock", qty: "Opening stock", quantity: "Opening stock", "স্টক": "Opening stock",
   "low stock alert": "Low stock alert", "reorder level": "Low stock alert", "low stock": "Low stock alert",
   description: "Description", details: "Description",
 };
@@ -59,7 +59,18 @@ type Row = {
   name: string; sku: string | null; barcode: string | null; category: string; unit: string | null;
   purchase_price: number; selling_price: number; wholesale_price: number | null; min_selling_price: number | null;
   tax_percent: number; stock_quantity: number; low_stock_threshold: number; description: string | null;
-  errors: string[]; matchId: string | null; matchBy: string | null;
+  is_active: boolean;
+  errors: string[]; notes: string[]; matchId: string | null; matchBy: string | null;
+};
+
+/** "5 PC", "12 pcs", "-3" → number + unit word. */
+const qtyWithUnit = (v: unknown): { n: number | null; unit: string | null } => {
+  if (v == null || String(v).trim() === "") return { n: null, unit: null };
+  if (typeof v === "number") return { n: v, unit: null };
+  const m = String(v).replace(/,/g, "").match(/^\s*(-?\d+(?:\.\d+)?)\s*([A-Za-z]*)/);
+  if (!m) return { n: NaN, unit: null };
+  const u = m[2].toLowerCase();
+  return { n: Number(m[1]), unit: !u ? null : u === "pc" || u === "pcs" || u === "piece" || u === "pieces" ? "pcs" : u };
 };
 
 const num = (v: unknown): number | null => {
@@ -97,6 +108,9 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
   const fileRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState("");
   const [raw, setRaw] = useState<Omit<Row, "matchId" | "matchBy">[]>([]);
+  const wbRef = useRef<XLSX.WorkBook | null>(null);
+  const [sheetNames, setSheetNames] = useState<string[]>([]);
+  const [sheet, setSheet] = useState("");
   const [unknownHeads, setUnknownHeads] = useState<string[]>([]);
   const [updateExisting, setUpdateExisting] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -115,8 +129,12 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
 
   const rows: Row[] = useMemo(() => {
     const seenSku = new Map<string, number>(), seenBarcode = new Map<string, number>();
+    const nameLines = new Map<string, number[]>();
+    for (const r of raw) { const k = r.name.trim().toLowerCase(); if (k) nameLines.set(k, [...(nameLines.get(k) ?? []), r.line]); }
     return raw.map((r) => {
       const errors = [...r.errors];
+      const same = (nameLines.get(r.name.trim().toLowerCase()) ?? []).filter((x) => x !== r.line);
+      if (same.length) errors.push(`Same name on line ${same.join(", ")} — keep one (fix the file)`);
       let m: Existing | undefined, by: string | null = null;
       if (r.sku && (m = index.bySku.get(r.sku.toLowerCase()))) by = "SKU";
       else if (r.barcode && (m = index.byBarcode.get(r.barcode.toLowerCase()))) by = "barcode";
@@ -144,26 +162,40 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
     update: rows.filter((r) => !r.errors.length && r.matchId).length,
   }), [rows]);
 
-  const reset = () => { setRaw([]); setFileName(""); setUnknownHeads([]); setResult(null); setProgress(0); if (fileRef.current) fileRef.current.value = ""; };
+  const reset = () => { setRaw([]); setFileName(""); setUnknownHeads([]); setResult(null); setProgress(0); setSheetNames([]); setSheet(""); wbRef.current = null; if (fileRef.current) fileRef.current.value = ""; };
 
   const readFile = async (file: File) => {
     setResult(null);
     try {
       const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
+      wbRef.current = wb;
+      setSheetNames(wb.SheetNames);
+      setFileName(file.name);
+      parseSheet(wb, wb.SheetNames[0]);
+    } catch (e: any) {
+      toast.error(e?.message ?? "Could not read the file");
+      reset();
+    }
+  };
+
+  const parseSheet = (wb: XLSX.WorkBook, sheetName: string) => {
+    setSheet(sheetName);
+    try {
+      const ws = wb.Sheets[sheetName];
       const grid = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: "", blankrows: false }) as unknown[][];
       if (!grid.length) throw new Error("The file is empty");
       const head = grid[0].map((h) => String(h ?? ""));
       const mapped = head.map(normHead);
       if (!mapped.includes("Name")) throw new Error('No "Name" column found. Download the template to see the columns.');
       if (!mapped.includes("Selling price")) throw new Error('No "Selling price" column found.');
-      setUnknownHeads(head.filter((h, i) => h.trim() && !mapped[i]));
+      setUnknownHeads(head.filter((h, i) => h.trim() && !mapped[i] && h.trim().toLowerCase() !== "status"));
       const out: Omit<Row, "matchId" | "matchBy">[] = [];
       grid.slice(1).forEach((cells, i) => {
         const get = (k: (typeof HEADERS)[number]) => { const j = mapped.indexOf(k); return j >= 0 ? cells[j] : ""; };
         const name = String(get("Name") ?? "").trim();
         if (!name && cells.every((c) => String(c ?? "").trim() === "")) return;
         const errors: string[] = [];
+        const notes: string[] = [];
         if (!name) errors.push("Name is empty");
         const sell = num(get("Selling price"));
         if (sell == null) errors.push("Selling price is empty"); else if (Number.isNaN(sell) || sell < 0) errors.push("Selling price is not a number");
@@ -179,20 +211,26 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
         const minP = n("Minimum price", "Minimum price");
         if (minP != null && sell != null && !Number.isNaN(sell) && minP > sell) errors.push("Minimum price is more than selling price");
         const s = (k: (typeof HEADERS)[number]) => { const v = String(get(k) ?? "").trim(); return v || null; };
+        const st = qtyWithUnit(get("Opening stock"));
+        let stock = st.n ?? 0;
+        if (Number.isNaN(stock)) { errors.push("Stock is not a number"); stock = 0; }
+        if (stock < 0) { notes.push(`Stock ${stock} (minus) — saved as 0`); stock = 0; }
+        const statusCol = head.findIndex((h) => h.trim().toLowerCase() === "status");
+        const status = statusCol >= 0 ? String(cells[statusCol] ?? "").trim().toLowerCase() : "";
         out.push({
-          line: i + 2, name, sku: s("SKU"), barcode: s("Barcode"), category: cat ?? "other", unit: s("Unit") ?? "pcs",
+          line: i + 2, name, sku: s("SKU"), barcode: s("Barcode"), category: cat ?? "other", unit: s("Unit") ?? st.unit ?? "pcs",
+          is_active: !(status === "inactive" || status === "disabled" || status === "no"), notes,
           purchase_price: purchase ?? 0, selling_price: sell != null && !Number.isNaN(sell) ? sell : 0,
           wholesale_price: wholesale, min_selling_price: minP,
-          tax_percent: n("Tax %", "Tax %") ?? 0, stock_quantity: n("Opening stock", "Opening stock") ?? 0,
+          tax_percent: n("Tax %", "Tax %") ?? 0, stock_quantity: stock,
           low_stock_threshold: n("Low stock alert", "Low stock alert") ?? 5, description: s("Description"), errors,
         });
       });
       if (!out.length) throw new Error("No product rows found under the header");
       setRaw(out);
-      setFileName(file.name);
     } catch (e: any) {
-      toast.error(e?.message ?? "Could not read the file");
-      reset();
+      toast.error(`${sheetName}: ${e?.message ?? "Could not read the sheet"}`);
+      setRaw([]);
     }
   };
 
@@ -216,13 +254,13 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
     const fresh = good.filter((r) => !r.matchId);
     for (let i = 0; i < fresh.length; i += 100) {
       const chunk = fresh.slice(i, i + 100);
-      const payload = () => chunk.map((r) => withB2b({ ...base(r), stock_quantity: r.stock_quantity, is_active: true }, r));
+      const payload = () => chunk.map((r) => withB2b({ ...base(r), stock_quantity: r.stock_quantity, is_active: r.is_active }, r));
       let { error } = await db.from("products").insert(payload());
       if (error && isColErr(error)) { b2bCols = false; ({ error } = await db.from("products").insert(payload())); }
       if (error) {
         // Find the bad rows one by one so the rest still go in.
         for (const r of chunk) {
-          const { error: e1 } = await db.from("products").insert(withB2b({ ...base(r), stock_quantity: r.stock_quantity, is_active: true }, r));
+          const { error: e1 } = await db.from("products").insert(withB2b({ ...base(r), stock_quantity: r.stock_quantity, is_active: r.is_active }, r));
           if (e1) failed.push({ line: r.line, name: r.name, error: e1.message }); else created++;
         }
       } else created += chunk.length;
@@ -259,7 +297,16 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
       <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto">
         <DialogHeader><DialogTitle className="flex items-center gap-2"><Upload className="h-4 w-4" /> Upload products (Excel / CSV)</DialogTitle></DialogHeader>
 
-        {!raw.length && !result && (
+        {sheetNames.length > 1 && !result && (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+            <span className="text-muted-foreground">This file has {sheetNames.length} sheets. Use:</span>
+            {sheetNames.map((n) => (
+              <Button key={n} size="sm" variant={n === sheet ? "default" : "outline"} className="h-7" onClick={() => wbRef.current && parseSheet(wbRef.current, n)}>{n}</Button>
+            ))}
+          </div>
+        )}
+
+        {!raw.length && !result && !fileName && (
           <div className="space-y-4">
             <ol className="list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
               <li>Download the template and fill one product per row (Name and Selling price are required).</li>
@@ -279,6 +326,13 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
               Drop an .xlsx, .xls or .csv file here
               <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void readFile(f); }} />
             </label>
+          </div>
+        )}
+
+        {!raw.length && !result && fileName && (
+          <div className="flex items-center justify-between rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+            <span>No product rows could be read from “{sheet}”.{sheetNames.length > 1 ? " Try another sheet above." : ""}</span>
+            <Button variant="outline" size="sm" onClick={reset}>Choose another file</Button>
           </div>
         )}
 
@@ -329,6 +383,8 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
                       <TableCell className="text-xs">
                         {r.errors.length ? (
                           <span className="flex items-start gap-1 text-destructive"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{r.errors.join("; ")}</span>
+                        ) : r.notes.length ? (
+                          <span className="text-amber-700">{r.matchId ? (updateExisting ? "Update" : "Skip") : "New"} · {r.notes.join("; ")}</span>
                         ) : r.matchId ? (
                           <span className="text-sky-700">{updateExisting ? `Update (same ${r.matchBy})` : "Skip — already in list"}</span>
                         ) : (
