@@ -5,7 +5,9 @@ import { useServerFn } from "@tanstack/react-start";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { AlertTriangle, Bike, Download, FileText, MessageCircle, PackageCheck, RefreshCw, RotateCcw, Search, Truck } from "lucide-react";
+import { AlertTriangle, Bike, Download, FileText, MessageCircle, PackageCheck, RefreshCw, RotateCcw, Search, Truck, KeyRound } from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
+import { SteadfastKeysDialog } from "@/components/SteadfastKeysDialog";
 import { ReturnFlow } from "@/components/ReturnFlow";
 import { checkSteadfastConnection, refreshAllCourierStatuses } from "@/lib/courier.functions";
 import { courierStage, type ParcelStage } from "@/lib/courier-status";
@@ -113,6 +115,9 @@ function DeliveryReportPage() {
   const qc = useQueryClient();
   const refreshFn = useServerFn(refreshAllCourierStatuses);
   const checkFn = useServerFn(checkSteadfastConnection);
+  const { hasRole } = useAuth();
+  const isAdmin = hasRole("admin");
+  const [keysOpen, setKeysOpen] = useState(false);
   const [checking, setChecking] = useState(false);
   const testSteadfast = async () => {
     setChecking(true);
@@ -252,12 +257,18 @@ function DeliveryReportPage() {
 
   return (
     <div className="min-w-0">
+      <SteadfastKeysDialog open={keysOpen} onOpenChange={setKeysOpen} />
       <PageHeader
         title="Delivery Report"
         description="Courier parcels and local deliveries together — what went out, what reached, and what is still to collect."
         icon={PackageCheck}
         actions={
           <div className="flex flex-wrap gap-2">
+            {isAdmin && (
+              <Button variant="outline" onClick={() => setKeysOpen(true)} title="Save the Steadfast API key and secret key">
+                <KeyRound className="h-4 w-4" /> Steadfast keys
+              </Button>
+            )}
             <Button variant="outline" disabled={checking} onClick={testSteadfast} title="Check that the Steadfast API key works (shows your Steadfast balance)">
               <PackageCheck className="h-4 w-4" /> {checking ? "Checking…" : "Test Steadfast"}
             </Button>

@@ -1,6 +1,25 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
+/**
+ * Steadfast keys: the keys an admin saved in the app (Delivery Report → Steadfast keys)
+ * come first; otherwise the hosting environment variables.
+ */
+async function steadfastKeys(supabase: any): Promise<{ apiKey: string; secretKey: string; source: "env" | "app" } | null> {
+  try {
+    const { data } = await supabase.rpc("get_courier_credentials", { _courier: "steadfast" });
+    if (data?.api_key && data?.secret_key) return { apiKey: data.api_key, secretKey: data.secret_key, source: "app" };
+  } catch {
+    /* function not installed yet */
+  }
+  const apiKey = process.env["STEADFAST_API_KEY"];
+  const secretKey = process.env["STEADFAST_SECRET_KEY"];
+  if (apiKey && secretKey) return { apiKey, secretKey, source: "env" };
+  return null;
+}
+
+const NO_KEYS = "Steadfast API keys are not saved. Admin: open Delivery Report → Steadfast keys, paste the API key and secret key, then Save.";
+
 type SendInput = {
   saleId: string;
   courier: string;
@@ -86,10 +105,11 @@ export const sendCourierOrder = createServerFn({ method: "POST" })
     } = { ok: false, message: "Courier not supported" };
 
     if (data.courier === "steadfast") {
-      const apiKey = process.env["STEADFAST_API_KEY"];
-      const secretKey = process.env["STEADFAST_SECRET_KEY"];
+      const keys = await steadfastKeys(supabase);
+      const apiKey = keys?.apiKey;
+      const secretKey = keys?.secretKey;
       if (!apiKey || !secretKey) {
-        apiResult = { ok: false, message: "Steadfast API credentials are not configured." };
+        apiResult = { ok: false, message: NO_KEYS };
       } else {
         try {
           const res = await fetch("https://portal.packzy.com/api/v1/create_order", {
@@ -184,9 +204,9 @@ export const refreshCourierStatus = createServerFn({ method: "POST" })
 
     if (order.courier !== "steadfast") return { ok: false as const, message: "Tracking not supported for this courier." };
 
-    const apiKey = process.env["STEADFAST_API_KEY"];
-    const secretKey = process.env["STEADFAST_SECRET_KEY"];
-    if (!apiKey || !secretKey) return { ok: false as const, message: "Steadfast API credentials are not configured." };
+    const keys = await steadfastKeys(supabase);
+    if (!keys) return { ok: false as const, message: NO_KEYS };
+    const { apiKey, secretKey } = keys;
 
     try {
       const res = await fetch(`https://portal.packzy.com/api/v1/status_by_cid/${order.consignment_id}`, {
@@ -213,9 +233,9 @@ export const refreshAllCourierStatuses = createServerFn({ method: "POST" })
   .inputValidator((input: { limit?: number } | undefined) => input ?? {})
   .handler(async ({ data, context }) => {
     const { supabase } = context;
-    const apiKey = process.env["STEADFAST_API_KEY"];
-    const secretKey = process.env["STEADFAST_SECRET_KEY"];
-    if (!apiKey || !secretKey) return { ok: false as const, message: "Steadfast API credentials are not configured." };
+    const keys = await steadfastKeys(supabase);
+    if (!keys) return { ok: false as const, message: NO_KEYS };
+    const { apiKey, secretKey } = keys;
 
     const { data: orders, error } = await supabase
       .from("courier_orders")
@@ -258,21 +278,23 @@ export const refreshAllCourierStatuses = createServerFn({ method: "POST" })
 /** Connection test: asks Steadfast for the account balance (changes nothing). */
 export const checkSteadfastConnection = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .handler(async () => {
-    const apiKey = process.env["STEADFAST_API_KEY"];
-    const secretKey = process.env["STEADFAST_SECRET_KEY"];
-    if (!apiKey || !secretKey) {
-      return { ok: false as const, reason: "not_configured" as const, message: "STEADFAST_API_KEY / STEADFAST_SECRET_KEY are not set on this server." };
-    }
+  .handler(async ({ context }) => {
+    const keys = await steadfastKeys((context as any).supabase);
+    if (!keys) return { ok: false as const, reason: "not_configured" as const, message: NO_KEYS };
+    const { apiKey, secretKey, source } = keys;
     try {
       const res = await fetch("https://portal.packzy.com/api/v1/get_balance", {
         headers: { "Api-Key": apiKey, "Secret-Key": secretKey, Accept: "application/json" },
       });
       const json: any = await res.json().catch(() => null);
       if (res.ok && json && Number(json.status) === 200) {
-        return { ok: true as const, balance: Number(json.current_balance ?? 0) };
+        return { ok: true as const, balance: Number(json.current_balance ?? 0), source };
       }
-      return { ok: false as const, reason: "rejected" as const, message: json?.message ?? `Steadfast answered HTTP ${res.status} — check the API key and secret key.` };
+      return {
+        ok: false as const,
+        reason: "rejected" as const,
+        message: `${json?.message ?? `Steadfast answered HTTP ${res.status}`} — the ${source === "env" ? "hosting (Vercel) environment" : "saved"} API key / secret key look wrong.`,
+      };
     } catch (e: any) {
       return { ok: false as const, reason: "network" as const, message: e?.message ?? "Could not reach Steadfast" };
     }
