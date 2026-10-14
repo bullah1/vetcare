@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { UserPlus } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -24,6 +24,7 @@ export function NewCustomerDialog({ onCreated }: { onCreated?: (id: string) => v
     setFullName(""); setPhone(""); setGender(""); setEmail(""); setAddress(""); setNotes(""); setB2b(false);
   };
 
+  const qc = useQueryClient();
   const create = useMutation({
     mutationFn: async () => {
       const name = fullName.trim();
@@ -51,6 +52,7 @@ export function NewCustomerDialog({ onCreated }: { onCreated?: (id: string) => v
       toast.success("Customer account created");
       setOpen(false);
       reset();
+      qc.invalidateQueries({ queryKey: ["owners"] });
       onCreated?.(id);
     },
     onError: (e: any) => toast.error(e.message ?? "Failed to create customer"),

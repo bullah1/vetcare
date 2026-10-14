@@ -286,8 +286,21 @@ const CART_STORAGE_KEY = "pos-cart-draft-v1";
 
 
 
+// POS product list (also re-read right before a bill is saved, so prices are never stale).
+async function loadPosProducts(): Promise<Product[]> {
+  const base = "id,name,sku,barcode,category,selling_price,tax_percent,stock_quantity,unit,low_stock_threshold,image_url";
+  // Wholesale / minimum price columns may not exist yet on an older database.
+  return fetchAll<Product>(() => (supabase as any).from("products")
+    .select(`${base},wholesale_price,min_selling_price`)
+    .eq("is_active", true).order("name").order("id"))
+    .catch(() => fetchAll<Product>(() => supabase.from("products")
+      .select(base)
+      .eq("is_active", true).order("name").order("id")));
+}
+
 function POSPage() {
   const qc = useQueryClient();
+  const { hasRole, can } = useAuth();
   const [q, setQ] = useState("");
   const [cart, setCart] = useState<CartLine[]>([]);
   const [qtyFocused, setQtyFocused] = useState<Record<string, boolean>>({});
@@ -382,18 +395,8 @@ function POSPage() {
 
   const { data: products = [] } = useQuery({
     queryKey: ["pos-products"],
-    queryFn: async () => {
-      // Paged: the API returns at most 1000 rows per request, so products past
-      // the first 1000 were missing from POS search and barcode scan.
-      const base = "id,name,sku,barcode,category,selling_price,tax_percent,stock_quantity,unit,low_stock_threshold,image_url";
-      // Wholesale / minimum price columns may not exist yet on an older database.
-      return fetchAll<Product>(() => (supabase as any).from("products")
-        .select(`${base},wholesale_price,min_selling_price`)
-        .eq("is_active", true).order("name").order("id"))
-        .catch(() => fetchAll<Product>(() => supabase.from("products")
-          .select(base)
-          .eq("is_active", true).order("name").order("id")));
-    },
+    // Paged: the API returns at most 1000 rows per request.
+    queryFn: loadPosProducts,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     refetchOnWindowFocus: false,
@@ -449,8 +452,9 @@ function POSPage() {
         low_stock_threshold: p?.low_stock_threshold ?? null,
         nearest_expiry: null,
         min_price: p?.min_selling_price ?? null,
-        // A held price that is not today's selling price is kept as typed.
-        price_edited: p ? Math.abs(Number(it.unit_price) - Number(p.selling_price)) > 0.004 : true,
+        // A held price that is not today's price is kept only for users allowed to change prices;
+        // for others it is updated to today's price before saving.
+        price_edited: p ? can("price_override") && Math.abs(Number(it.unit_price) - Number(p.selling_price)) > 0.004 : false,
       };
     });
     if (lines.length === 0) return false;
@@ -539,7 +543,6 @@ function POSPage() {
   });
 
   // B2B / wholesale customer: wholesale prices, and allowed users may change prices.
-  const { hasRole, can } = useAuth();
   const isAdmin = hasRole("admin");
   const isB2b = owners.find((o) => o.id === ownerId)?.customer_type === "b2b";
   const canEditPrice = isB2b && can("price_override");
@@ -924,7 +927,35 @@ function POSPage() {
       if (cart.length === 0) throw new Error("Cart is empty");
       const zeroLine = cart.find((l) => !(l.quantity > 0));
       if (zeroLine) throw new Error(`Set a quantity for ${zeroLine.name} or remove it`);
-      const lowLine = cart.find(belowMin);
+      // Prices may have changed since POS was opened (Inventory, Purchases, another counter).
+      // Re-read them; lines whose price was not typed by hand take today's price.
+      // The customer may have been made B2B / retail on another screen or device.
+      if (ownerId) {
+        const { data: o, error: oErr } = await (supabase as any).from("pet_owners").select("customer_type").eq("id", ownerId).maybeSingle();
+        if (!oErr && o && (o.customer_type === "b2b") !== isB2b) {
+          await qc.invalidateQueries({ queryKey: ["owners"] });
+          throw new Error(`This customer is now ${o.customer_type === "b2b" ? "B2B / wholesale" : "retail"} — prices were updated. Check the bill and press Charge again.`);
+        }
+      }
+      const fresh = await qc.fetchQuery({ queryKey: ["pos-products"], queryFn: loadPosProducts, staleTime: 0 });
+      const byId = new Map(fresh.map((p) => [p.id, p]));
+      const changes: string[] = [];
+      const repriced = cart.map((l) => {
+        const p = byId.get(l.product_id);
+        if (!p) return l;
+        const list = priceFor(p, isB2b);
+        const next = { ...l, list_price: list, min_price: p.min_selling_price ?? null };
+        if (!l.price_edited && Math.abs(list - l.unit_price) > 0.004) {
+          changes.push(`${l.name.trim()}: ৳${l.unit_price.toFixed(2)} → ৳${list.toFixed(2)}`);
+          next.unit_price = list;
+        }
+        return next;
+      });
+      setCart(repriced);
+      if (changes.length) {
+        throw new Error(`Price updated — ${changes.join(", ")}. Check the bill and press Charge again.`);
+      }
+      const lowLine = repriced.find(belowMin);
       if (lowLine && !isAdmin) throw new Error(`${lowLine.name.trim()} is below its minimum price ৳${Number(lowLine.min_price).toFixed(2)} — only an admin can sell it lower`);
       if (delOn) {
         if (!delManId) throw new Error("Choose a delivery man (or turn Delivery off)");

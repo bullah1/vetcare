@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Pencil } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -35,6 +35,7 @@ export function CustomerEditDialog({ customer, open, onOpenChange, onSaved }: Pr
   const [notes, setNotes] = useState("");
   const [ctype, setCtype] = useState<"retail" | "b2b">("retail");
   const [ctypeLoaded, setCtypeLoaded] = useState(false);
+  const qc = useQueryClient();
 
   useEffect(() => {
     if (!customer) return;
@@ -76,6 +77,8 @@ export function CustomerEditDialog({ customer, open, onOpenChange, onSaved }: Pr
     },
     onSuccess: () => {
       toast.success("Customer details updated");
+      // POS keeps the customer list in memory — refresh it so B2B / name changes show at once.
+      qc.invalidateQueries({ queryKey: ["owners"] });
       onOpenChange(false);
       onSaved?.();
     },

@@ -483,6 +483,7 @@ function QuickAdjustDialog({ product, onOpenChange }: { product: Product | null;
     toast.success("Stock updated");
     refreshAppData();
     qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["pos-products"] });
     qc.invalidateQueries({ queryKey: ["stock-adjustments"] });
     reset();
     onOpenChange(false);
@@ -601,6 +602,7 @@ function ProductDialog({ product, onDone }: { product: Product | null; onDone: (
     onSuccess: () => {
       toast.success(product ? "Product updated" : "Product created");
       qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["pos-products"] });
       onDone();
     },
     onError: (e: Error) => toast.error(e.message),
@@ -1021,6 +1023,7 @@ function PurchasesTab() {
         <BulkPurchaseDialog products={products as any[]} suppliers={suppliers as any[]} onDone={() => {
           qc.invalidateQueries({ queryKey: ["batches"] });
           qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["pos-products"] });
         }} />
         <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) requestIdRef.current = null; }}>
           <DialogTrigger asChild><Button><PackagePlus className="h-4 w-4" /> Record purchase</Button></DialogTrigger>

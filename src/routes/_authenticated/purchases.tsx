@@ -339,6 +339,7 @@ function PurchasesPage() {
             qc.invalidateQueries({ queryKey: ["suppliers"] });
             qc.invalidateQueries({ queryKey: ["products-purchase"] });
             qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["pos-products"] });
             qc.invalidateQueries({ queryKey: ["batches"] });
           }}
         />
