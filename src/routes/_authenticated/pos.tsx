@@ -28,6 +28,7 @@ import { toast } from "sonner";
 import { DELIVERY_LINE_NAME, printInvoice, printThermal, receiptExtras, type Receipt } from "@/lib/invoice-print";
 import { fetchOpenBills, payPreviousDues, splitPayments, usePreviousDue } from "@/lib/previous-due";
 import { useAuth } from "@/lib/auth-context";
+import { schemaMissing, withSchemaFallback } from "@/lib/schema-fallback";
 import { useEffect } from "react";
 import { resolveProductImageUrl } from "@/components/ProductImageUpload";
 import ThermalPrinterSettings from "@/components/ThermalPrinterSettings";
@@ -290,12 +291,15 @@ const CART_STORAGE_KEY = "pos-cart-draft-v1";
 async function loadPosProducts(): Promise<Product[]> {
   const base = "id,name,sku,barcode,category,selling_price,tax_percent,stock_quantity,unit,low_stock_threshold,image_url";
   // Wholesale / minimum price columns may not exist yet on an older database.
-  return fetchAll<Product>(() => (supabase as any).from("products")
-    .select(`${base},wholesale_price,min_selling_price`)
-    .eq("is_active", true).order("name").order("id"))
-    .catch(() => fetchAll<Product>(() => supabase.from("products")
+  return withSchemaFallback(
+    "products.b2b",
+    () => fetchAll<Product>(() => (supabase as any).from("products")
+      .select(`${base},wholesale_price,min_selling_price`)
+      .eq("is_active", true).order("name").order("id")),
+    () => fetchAll<Product>(() => supabase.from("products")
       .select(base)
-      .eq("is_active", true).order("name").order("id")));
+      .eq("is_active", true).order("name").order("id")),
+  );
 }
 
 function POSPage() {
@@ -465,7 +469,7 @@ function POSPage() {
     setResumedBill(bill);
     setMethod("cash");
     return true;
-  }, [products]);
+  }, [products, can]);
 
   // Load a pending bill queued from the Pending Bills screen into the cart.
   const resumeTried = useRef(false);
@@ -510,8 +514,11 @@ function POSPage() {
   const { data: owners = [] } = useQuery({
     queryKey: ["owners"],
     queryFn: () =>
-      fetchAll<Owner>(() => (supabase as any).from("pet_owners").select("id,full_name,phone,address,customer_type").order("full_name").order("id"))
-        .catch(() => fetchAll<Owner>(() => supabase.from("pet_owners").select("id,full_name,phone,address").order("full_name").order("id"))),
+      withSchemaFallback(
+        "pet_owners.customer_type",
+        () => fetchAll<Owner>(() => (supabase as any).from("pet_owners").select("id,full_name,phone,address,customer_type").order("full_name").order("id")),
+        () => fetchAll<Owner>(() => supabase.from("pet_owners").select("id,full_name,phone,address").order("full_name").order("id")),
+      ),
     staleTime: 10 * 60_000,
     gcTime: 30 * 60_000,
     refetchOnWindowFocus: false,
@@ -566,7 +573,6 @@ function POSPage() {
       });
       return changed ? next : c;
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isB2b, products]);
   const setLinePrice = (id: string, raw: string) =>
     setCart((c) => c.map((l) => (l.product_id === id ? { ...l, unit_price: Math.max(0, Number(raw) || 0), price_edited: true } : l)));
@@ -840,7 +846,6 @@ function POSPage() {
       return;
     }
     openQty(pick); // Product → Enter → Quantity pop-up → Enter
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanMaps, addToCart, deferredQ, cart.length, searchProducts]);
 
 
@@ -930,7 +935,7 @@ function POSPage() {
       // Prices may have changed since POS was opened (Inventory, Purchases, another counter).
       // Re-read them; lines whose price was not typed by hand take today's price.
       // The customer may have been made B2B / retail on another screen or device.
-      if (ownerId) {
+      if (ownerId && !schemaMissing("pet_owners.customer_type")) {
         const { data: o, error: oErr } = await (supabase as any).from("pet_owners").select("customer_type").eq("id", ownerId).maybeSingle();
         if (!oErr && o && (o.customer_type === "b2b") !== isB2b) {
           await qc.invalidateQueries({ queryKey: ["owners"] });

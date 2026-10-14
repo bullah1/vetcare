@@ -5,6 +5,7 @@
 //    lines of the invoice they belong to.
 import { supabase } from "@/integrations/supabase/client";
 import { fetchAll, fetchAllIn } from "@/lib/fetch-all";
+import { withSchemaFallback } from "@/lib/schema-fallback";
 import { dayRangeISO } from "@/lib/sales-ledger";
 import { dhakaDayKey } from "@/lib/sales-summary";
 
@@ -43,11 +44,11 @@ export type ProductSalesData = Awaited<ReturnType<typeof loadProductSales>>;
 
 async function itemsFor(saleIds: string[]) {
   const base = "id,sale_id,product_id,name,quantity,unit_price,discount,tax,line_total,cost_price,returned_quantity, product:products(sku,category)";
-  try {
-    return await fetchAllIn<ItemRow>(saleIds, (ids) => db.from("sale_items").select(`${base},item_type,list_price,price_overridden`).in("sale_id", ids).order("id"));
-  } catch {
-    return await fetchAllIn<ItemRow>(saleIds, (ids) => db.from("sale_items").select(base).in("sale_id", ids).order("id"));
-  }
+  return withSchemaFallback(
+    "sale_items.list_price",
+    () => fetchAllIn<ItemRow>(saleIds, (ids) => db.from("sale_items").select(`${base},item_type,list_price,price_overridden`).in("sale_id", ids).order("id")),
+    () => fetchAllIn<ItemRow>(saleIds, (ids) => db.from("sale_items").select(base).in("sale_id", ids).order("id")),
+  );
 }
 
 export async function loadProductSales(from: string, to: string) {

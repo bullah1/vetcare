@@ -62,7 +62,8 @@ function AdjustmentsPage() {
   }, [adjustments, search]);
 
   const stats = useMemo(() => {
-    let inc = 0, dec = 0, count = adjustments.length;
+    let inc = 0, dec = 0;
+    const count = adjustments.length;
     adjustments.forEach((a: any) => {
       const c = Number(a.quantity_change);
       if (c > 0) inc += c; else dec += Math.abs(c);

@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Pencil } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { markSchemaMissing, schemaMissing } from "@/lib/schema-fallback";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -46,10 +47,12 @@ export function CustomerEditDialog({ customer, open, onOpenChange, onSaved }: Pr
     setAddress(customer.address ?? "");
     setNotes(customer.notes ?? "");
     setCtypeLoaded(false);
+    if (schemaMissing("pet_owners.customer_type")) return;
     // Read separately so older databases without the column still work.
     (supabase as any).from("pet_owners").select("customer_type").eq("id", customer.id).maybeSingle()
       .then(({ data, error }: any) => {
         if (!error) { setCtype(data?.customer_type === "b2b" ? "b2b" : "retail"); setCtypeLoaded(true); }
+        else markSchemaMissing("pet_owners.customer_type");
       });
   }, [customer?.id, open]);
 

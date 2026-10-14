@@ -87,7 +87,7 @@ function RiderDialog({ group, onClose, onSaved }: { group: Group; onClose: () =>
   const [bulk, setBulk] = useState("");
   const [busy, setBusy] = useState(false);
   const picked = group.list.filter((s) => sel.has(s.rowId));
-  const toggle = (id: string) => setSel((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggle = (id: string) => setSel((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   const run = async (paid: boolean | null, cash: boolean | null) => {
     if (!picked.length) { toast.error("Select at least one delivery"); return; }
@@ -173,7 +173,7 @@ function CourierDialog({ group, onClose, onSaved }: { group: Group; onClose: () 
   const [sel, setSel] = useState<Set<string>>(() => new Set(group.list.filter((s) => s.codReceived == null || s.cost == null).map((s) => s.rowId)));
   const [busy, setBusy] = useState(false);
   const set = (id: string, k: "actual" | "ret" | "cod", v: string) => setVals((p) => ({ ...p, [id]: { ...p[id], [k]: v.replace(/[^0-9.]/g, "") } }));
-  const toggle = (id: string) => setSel((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggle = (id: string) => setSel((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   // Delivered: courier pays COD minus its deduction. Returned: nothing comes back.
   const autoCod = (s: Shipment) => {
     const v = vals[s.rowId];
