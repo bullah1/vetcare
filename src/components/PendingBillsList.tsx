@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { HeldBillPrintMenu } from "@/components/HeldBillPrintMenu";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
@@ -182,6 +183,7 @@ export function PendingBillsList() {
                       <div className="flex justify-end gap-1">
                         {b.status === "pending" && (
                           <>
+                            <HeldBillPrintMenu bill={b} />
                             <Button size="sm" onClick={() => resume(b)}>
                               <Play className="h-4 w-4" /> Complete
                             </Button>

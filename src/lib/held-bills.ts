@@ -183,3 +183,40 @@ export async function updateHeldBill(id: string, input: SaveHeldBillInput) {
   if (error) throw error;
   return data as unknown as HeldBill;
 }
+
+/** A held / pending bill as a printable bill marked "PENDING BILL — UNPAID". */
+export async function heldBillReceipt(bill: HeldBill): Promise<import("@/lib/invoice-print").Receipt> {
+  const items = (bill.items ?? []).map((it) => {
+    const lineSub = Number(it.unit_price) * Number(it.quantity) - (Number(it.discount) || 0);
+    const tax = lineSub * ((Number(it.tax_percent) || 0) / 100);
+    return { name: it.name, quantity: Number(it.quantity), unit_price: Number(it.unit_price), discount: Number(it.discount) || 0, tax, line_total: lineSub + tax };
+  });
+  const tax = items.reduce((a, i) => a + i.tax, 0);
+  const total = Number(bill.total) || 0;
+  let prevDue: { before: number; paid: number; after: number } | null = null;
+  if (bill.owner_id) {
+    try {
+      const { fetchOpenBills } = await import("@/lib/previous-due");
+      const before = Math.round((await fetchOpenBills(bill.owner_id)).reduce((a, b) => a + b.due, 0) * 100) / 100;
+      if (before > 0) prevDue = { before, paid: 0, after: before };
+    } catch {
+      /* previous due is extra information only */
+    }
+  }
+  return {
+    invoice_no: bill.bill_no,
+    subtotal: Number(bill.subtotal) || items.reduce((a, i) => a + i.line_total - i.tax, 0),
+    tax,
+    discount: Number(bill.discount) || 0,
+    total,
+    paid: 0,
+    due: total,
+    method: "—",
+    issued_at: bill.created_at,
+    owner: bill.customer_name || bill.customer_phone ? { full_name: bill.customer_name ?? "Customer", phone: bill.customer_phone } : null,
+    items,
+    notes: bill.note,
+    pending: { channel: HELD_CHANNEL_LABELS[bill.channel] ?? bill.channel ?? null },
+    prevDue,
+  };
+}

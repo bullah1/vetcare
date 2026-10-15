@@ -39,7 +39,11 @@ export type Receipt = {
   delivery?: ReceiptDelivery | null;
   /** The customer's older unpaid bills at the time of this bill, and what was paid on them now. */
   prevDue?: { before: number; paid: number; after: number } | null;
+  /** A held / pending bill (not a sale yet): printed as "PENDING BILL — UNPAID". */
+  pending?: { channel?: string | null } | null;
 };
+
+const PENDING_NOTE = "This is not a final invoice. The final invoice is given after payment. Prices may change until then.";
 
 /** Name of the bill line that carries a delivery charge inside the sale. */
 export const DELIVERY_LINE_NAME = "Delivery charge";
@@ -153,7 +157,12 @@ export function shareInvoiceOnWhatsApp(r: Receipt, phoneOverride?: string, targe
   lines.push(`${CLINIC.address}`);
   lines.push(`${CLINIC.phone}`);
   lines.push("");
-  lines.push(`*Invoice:* ${r.invoice_no}`);
+  if (r.pending) {
+    lines.push("*PENDING BILL — UNPAID*");
+    lines.push("");
+  }
+  lines.push(`*${r.pending ? "Bill no" : "Invoice"}:* ${r.invoice_no}`);
+  if (r.pending?.channel) lines.push(`*Order:* ${r.pending.channel}`);
   lines.push(`*Date:* ${dateStr}`);
   if (r.owner?.full_name) lines.push(`*Customer:* ${r.owner.full_name}`);
   if (r.delivery) {
@@ -184,10 +193,11 @@ export function shareInvoiceOnWhatsApp(r: Receipt, phoneOverride?: string, targe
   } else {
     lines.push(`*Total: ${money(r.total)}*`);
     lines.push(`Paid: ${money(r.paid)}`);
-    if (r.due > 0) lines.push(`*${r.delivery ? "To collect" : "Due"}: ${money(r.due)}*`);
+    if (r.due > 0) lines.push(`*${r.pending ? "Amount to pay" : r.delivery ? "To collect" : "Due"}: ${money(r.due)}*`);
   }
   lines.push("");
-  lines.push(`Payment: ${paymentSummary(r)}`);
+  if (r.pending) lines.push(`_${PENDING_NOTE}_`);
+  else lines.push(`Payment: ${paymentSummary(r)}`);
   if (r.notes) { lines.push(""); lines.push(`Note: ${r.notes}`); }
   lines.push("");
   lines.push(`Thank you for choosing ${CLINIC.name}.`);
@@ -298,7 +308,10 @@ export function printInvoice(r: Receipt, targetWindow?: Window | null) {
   .disclaimer{margin-top:24px;font-size:10px;color:#94a3b8;text-align:center;border-top:1px dashed #e5e7eb;padding-top:10px}
   @page{size:A4;margin:14mm}
   @media print{.no-print{display:none}}
+  .pending-mark{position:fixed;top:42%;left:50%;transform:translate(-50%,-50%) rotate(-28deg);font-size:120px;font-weight:800;letter-spacing:.08em;color:rgba(185,28,28,.08);white-space:nowrap;pointer-events:none;z-index:0}
+  .pending-banner{margin:0 0 14px;padding:8px 12px;border:2px dashed #b91c1c;border-radius:8px;color:#b91c1c;font-weight:700;text-align:center;letter-spacing:.06em}
 </style></head><body>
+${r.pending ? '<div class="pending-mark">PENDING</div>' : ""}
 <div class="sheet">
   <header>
     <div class="brand">
@@ -311,9 +324,10 @@ export function printInvoice(r: Receipt, targetWindow?: Window | null) {
       <div class="lic">Clinic License: ${escapeHtml(CLINIC.license)}</div>
     </div>
     <div>
-      <div class="doc-title">${r.delivery ? "Delivery Invoice" : "Tax Invoice"}</div>
+      <div class="doc-title"${r.pending ? ' style="color:#b91c1c"' : ""}>${r.pending ? "Pending Bill" : r.delivery ? "Delivery Invoice" : "Tax Invoice"}</div>
       <div class="doc-meta">
-        <div><span class="k">Invoice:</span> <span class="id">${escapeHtml(r.invoice_no)}</span></div>
+        <div><span class="k">${r.pending ? "Bill no:" : "Invoice:"}</span> <span class="id">${escapeHtml(r.invoice_no)}</span></div>
+        ${r.pending ? `<div><span class="status due">Unpaid${r.pending.channel ? ` · ${escapeHtml(r.pending.channel)}` : ""}</span></div>` : ""}
         <div><span class="k">Issued:</span> ${escapeHtml(issued.toLocaleString())}</div>
         <div><span class="k">Printed:</span> ${escapeHtml(printedAt.toLocaleString())}</div>
         ${
@@ -327,6 +341,7 @@ export function printInvoice(r: Receipt, targetWindow?: Window | null) {
     </div>
   </header>
 
+  ${r.pending ? '<div class="pending-banner">PENDING BILL — UNPAID — NOT A FINAL INVOICE</div>' : ""}
   <div class="info">
     <div><div class="label">Billed To</div><div class="value">${escapeHtml(r.owner?.full_name ?? "Walk-in Customer")}${
     r.owner?.phone ? ` <span class="muted">· ${escapeHtml(r.owner.phone)}</span>` : ""
@@ -365,18 +380,18 @@ export function printInvoice(r: Receipt, targetWindow?: Window | null) {
     ${toCollect(r) > 0 ? `<div class="row due"><span>${r.delivery!.kind === "courier" ? "Cash on Delivery" : "To Collect"}</span><span>${money(toCollect(r))}</span></div>` : ""}`
       : `<div class="row grand"><span>Grand Total</span><span>${money(r.total)}</span></div>
     <div class="row"><span class="muted">Paid</span><span>${money(r.paid)}</span></div>
-    ${r.due > 0 ? `<div class="row due"><span>${r.delivery ? "To Collect" : "Due"}</span><span>${money(r.due)}</span></div>` : ""}`}
+    ${r.due > 0 ? `<div class="row due"><span>${r.pending ? "Amount to Pay" : r.delivery ? "To Collect" : "Due"}</span><span>${money(r.due)}</span></div>` : ""}`}
   </div>
 
   ${paymentsBlock}
 
-  <div class="pay">Thank you for choosing ${escapeHtml(CLINIC.name)}. ${
+  <div class="pay">${r.pending ? `${escapeHtml(PENDING_NOTE)} Amount to pay: <b>${money(prevRows(r)?.[4].value ?? r.due)}</b>.` : `Thank you for choosing ${escapeHtml(CLINIC.name)}. ${
     r.delivery
       ? toCollect(r) > 0
         ? `Please pay ${money(toCollect(r))} to the ${r.delivery.kind === "courier" ? "courier" : "delivery man"} when you receive your order.`
         : "Your order is fully paid — nothing to pay on delivery."
       : `Please retain this invoice for your records${(prevRows(r)?.[4].value ?? r.due) > 0 ? ` — outstanding balance of ${money(prevRows(r)?.[4].value ?? r.due)} is payable at your next visit.` : "."}`
-  }</div>
+  }`}</div>
 
   ${r.notes ? `<div class="notes"><strong>Note:</strong> ${escapeHtml(r.notes)}</div>` : ""}
 
@@ -466,7 +481,8 @@ export function saveThermalSettings(s: ThermalSettings) {
   }
 }
 
-export function printThermal(r: Receipt, override?: Partial<ThermalSettings>) {
+/** `targetWindow`: a window opened beforehand (inside the click), so async callers are not pop-up blocked. */
+export function printThermal(r: Receipt, override?: Partial<ThermalSettings>, targetWindow?: Window | null) {
   const CLINIC = getClinic();
   const s: ThermalSettings = { ...getThermalSettings(), ...(override ?? {}) };
   const issued = new Date(r.issued_at);
@@ -494,7 +510,7 @@ export function printThermal(r: Receipt, override?: Partial<ThermalSettings>) {
               `<div class="tot"><span>Paid (${escapeHtml(p.method)})</span><span>${money(Number(p.amount))}</span></div>`
           )
           .join("")
-      : `<div class="tot"><span>Paid (${escapeHtml(r.method)})</span><span>${money(r.paid)}</span></div>`;
+      : `<div class="tot"><span>${r.pending ? "Paid" : `Paid (${escapeHtml(r.method)})`}</span><span>${money(r.paid)}</span></div>`;
 
   const headerBlock = `
   <div class="center hdr">
@@ -504,7 +520,8 @@ export function printThermal(r: Receipt, override?: Partial<ThermalSettings>) {
     ${s.showLicense ? `<div class="addr">Lic: ${escapeHtml(CLINIC.license)}</div>` : ""}
   </div>
   <div class="sep"></div>
-  <div class="kv"><span>Invoice</span><span>${escapeHtml(r.invoice_no)}</span></div>
+  ${r.pending ? `<div class="center"><b>*** PENDING BILL — UNPAID ***</b></div>${r.pending.channel ? `<div class="center">${escapeHtml(r.pending.channel)}</div>` : ""}<div class="sep"></div>` : ""}
+  <div class="kv"><span>${r.pending ? "Bill no" : "Invoice"}</span><span>${escapeHtml(r.invoice_no)}</span></div>
   <div class="kv"><span>Date</span><span>${escapeHtml(issued.toLocaleString())}</span></div>
   <div class="kv"><span>Customer</span><span>${escapeHtml(r.owner?.full_name ?? "Walk-in")}</span></div>
   ${r.owner?.phone ? `<div class="kv"><span>Phone</span><span>${escapeHtml(r.owner.phone)}</span></div>` : ""}
@@ -531,10 +548,11 @@ export function printThermal(r: Receipt, override?: Partial<ThermalSettings>) {
   ${toCollect(r) > 0 ? `<div class="tot"><span>${r.delivery!.kind === "courier" ? "COD" : "To collect"}</span><span>${money(toCollect(r))}</span></div>` : ""}`
     : `<div class="tot grand"><span>TOTAL</span><span>${money(r.total)}</span></div>
   ${payLines}
-  ${r.due > 0 ? `<div class="tot"><span>${r.delivery ? "To collect" : "Due"}</span><span>${money(r.due)}</span></div>` : ""}`}
+  ${r.due > 0 ? `<div class="tot"><span>${r.pending ? "AMOUNT TO PAY" : r.delivery ? "To collect" : "Due"}</span><span>${money(r.due)}</span></div>` : ""}`}
   <div class="sep"></div>`;
 
   const footerBlock = `
+  ${r.pending ? `<div class="center"><b>*** PENDING — NOT PAID ***</b></div><div class="center muted" style="font-size:10px;margin:2px 0 4px">${escapeHtml(PENDING_NOTE)}</div>` : ""}
   <div class="center thanks">Thank you!<br>${escapeHtml(CLINIC.name)}</div>
   ${s.footerNote ? `<div class="center muted" style="font-size:10px;margin-top:4px">${escapeHtml(s.footerNote)}</div>` : ""}
   <div class="feed" style="height:${Math.max(0, Math.min(3, s.feedLines)).toFixed(1)}mm"></div>`;
@@ -629,7 +647,7 @@ export function printThermal(r: Receipt, override?: Partial<ThermalSettings>) {
 </script>
 </body></html>`;
 
-  const w = window.open("", "_blank", `width=${Math.max(320, s.paperWidth * 6)},height=800`);
+  const w = targetWindow ?? window.open("", "_blank", `width=${Math.max(320, s.paperWidth * 6)},height=800`);
   if (!w) {
     toast.error("Enable pop-ups to print the receipt");
     return;

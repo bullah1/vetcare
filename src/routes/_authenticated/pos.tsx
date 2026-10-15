@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { memo, useCallback, useDeferredValue, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ShoppingCart, Search, Plus, Minus, Trash2, Receipt as ReceiptIcon, CheckCircle2, AlertTriangle, Clock, UserPlus, Check, ChevronsUpDown, PauseCircle, ClipboardList, X, Bike } from "lucide-react";
+import { ShoppingCart, Search, Plus, Minus, Trash2, Receipt as ReceiptIcon, CheckCircle2, AlertTriangle, Clock, UserPlus, Check, ChevronsUpDown, PauseCircle, ClipboardList, X, Bike, Printer } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 
 import { supabase } from "@/integrations/supabase/client";
@@ -28,6 +28,7 @@ import { toast } from "sonner";
 import { DELIVERY_LINE_NAME, printInvoice, printThermal, receiptExtras, type Receipt } from "@/lib/invoice-print";
 import { fetchOpenBills, payPreviousDues, splitPayments, usePreviousDue } from "@/lib/previous-due";
 import { useAuth } from "@/lib/auth-context";
+import { HeldBillPrintMenu, openPrintWindow, printHeldBill } from "@/components/HeldBillPrintMenu";
 import { schemaMissing, withSchemaFallback } from "@/lib/schema-fallback";
 import { useEffect } from "react";
 import { resolveProductImageUrl } from "@/components/ProductImageUpload";
@@ -1107,14 +1108,15 @@ function POSPage() {
   };
 
   const holdBill = useMutation({
-    mutationFn: holdCurrentCart,
-    onSuccess: (b) => {
+    mutationFn: async (opts?: { printWindow?: Window | null; kind?: "thermal" | "a4" }) => ({ bill: await holdCurrentCart(), opts }),
+    onSuccess: ({ bill: b, opts }) => {
       toast.success(`Bill ${b.bill_no} on hold — tap Held to bring it back.`);
+      if (opts?.kind) void printHeldBill(b, opts.kind, opts.printWindow);
       clearCart();
       setCartOpen(false);
       setTimeout(() => searchRef.current?.focus(), 50);
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error, opts) => { opts?.printWindow?.close(); toast.error(e.message); },
   });
 
   // Bring a held bill back. Whatever is in the cart now is put on hold first,
@@ -1503,7 +1505,7 @@ function POSPage() {
         </p>
       )}
 
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2">
         <Button className="h-12 text-base" disabled={cart.length === 0 || hasZeroQty || checkout.isPending || !shiftOpen} onClick={() => checkout.mutate()}>
           <ReceiptIcon className="h-4 w-4" />
           {!shiftOpen
@@ -1518,10 +1520,23 @@ function POSPage() {
           className="h-12"
           variant="outline"
           disabled={cart.length === 0 || holdBill.isPending}
-          onClick={() => holdBill.mutate()}
+          onClick={() => holdBill.mutate(undefined)}
           title={resumedBill ? `Hold again (${resumedBill.bill_no})` : "Put this bill on hold"}
         >
           <PauseCircle className="h-4 w-4" /> {holdBill.isPending ? "…" : "Hold"}
+        </Button>
+        <Button
+          className="h-12 w-12 px-0"
+          variant="outline"
+          disabled={cart.length === 0 || holdBill.isPending}
+          onClick={() => {
+            const kind = enterPrint === "a4" ? "a4" : "thermal";
+            holdBill.mutate({ kind, printWindow: openPrintWindow(kind) });
+          }}
+          title="Hold and print as a pending (unpaid) bill"
+          aria-label="Hold and print pending bill"
+        >
+          <Printer className="h-4 w-4" />
         </Button>
       </div>
       {isDesk && cart.length > 0 && (
@@ -1934,6 +1949,7 @@ function POSPage() {
                   <div className="shrink-0 text-right">
                     <div className="text-sm font-semibold tabular-nums">৳ {Number(b.total).toFixed(2)}</div>
                     <div className="mt-1 flex gap-1">
+                      <HeldBillPrintMenu bill={b} />
                       <Button
                         size="icon"
                         variant="ghost"
