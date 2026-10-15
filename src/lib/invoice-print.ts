@@ -309,7 +309,6 @@ export function printInvoice(r: Receipt, targetWindow?: Window | null) {
   @page{size:A4;margin:14mm}
   @media print{.no-print{display:none}}
   .pending-mark{position:fixed;top:42%;left:50%;transform:translate(-50%,-50%) rotate(-28deg);font-size:120px;font-weight:800;letter-spacing:.08em;color:rgba(185,28,28,.08);white-space:nowrap;pointer-events:none;z-index:0}
-  .pending-banner{margin:0 0 14px;padding:8px 12px;border:2px dashed #b91c1c;border-radius:8px;color:#b91c1c;font-weight:700;text-align:center;letter-spacing:.06em}
 </style></head><body>
 ${r.pending ? '<div class="pending-mark">PENDING</div>' : ""}
 <div class="sheet">
@@ -341,7 +340,6 @@ ${r.pending ? '<div class="pending-mark">PENDING</div>' : ""}
     </div>
   </header>
 
-  ${r.pending ? '<div class="pending-banner">PENDING BILL — UNPAID — NOT A FINAL INVOICE</div>' : ""}
   <div class="info">
     <div><div class="label">Billed To</div><div class="value">${escapeHtml(r.owner?.full_name ?? "Walk-in Customer")}${
     r.owner?.phone ? ` <span class="muted">· ${escapeHtml(r.owner.phone)}</span>` : ""
