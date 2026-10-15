@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { format } from "date-fns";
 import { UserPlus, Repeat, Users, Percent } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -33,46 +32,41 @@ export function CustomerMixCard() {
   const rows = (data?.rows ?? []).filter((r) => (open === "all" || open === null ? true : r.type === open));
 
   const tiles = [
-    { key: "all" as const, label: "Total Customers", value: String(data?.total ?? 0), icon: Users, tone: "text-primary" },
-    { key: "new" as const, label: "New Customers", value: String(data?.newCustomers ?? 0), icon: UserPlus, tone: "text-success" },
-    { key: "repeat" as const, label: "Repeat Customers", value: String(data?.repeatCustomers ?? 0), icon: Repeat, tone: "text-accent-foreground" },
+    { key: "all" as const, label: "Customers", value: String(data?.total ?? 0), icon: Users, hint: "Served today" },
+    { key: "new" as const, label: "New", value: String(data?.newCustomers ?? 0), icon: UserPlus, hint: money(data?.newAmount ?? 0) },
+    { key: "repeat" as const, label: "Returning", value: String(data?.repeatCustomers ?? 0), icon: Repeat, hint: money(data?.repeatAmount ?? 0) },
   ];
+  const rate = data?.repeatRate ?? 0;
 
   return (
     <>
-      <Card className="shadow-[var(--shadow-soft)]">
-        <CardHeader className="pb-3">
-          <div className="flex items-center gap-2">
-            <Users className="h-4 w-4 text-primary" />
-            <CardTitle className="text-base">Today's customers — New vs Repeat</CardTitle>
+      <section className="min-w-0 rounded-2xl border bg-card p-4 sm:p-5">
+        <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,220px)_minmax(0,1fr)] lg:items-center">
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold">Customers today</h2>
+            <p className="text-xs text-muted-foreground">Matched by mobile number, so nobody is counted as new twice. Tap a number to see who.</p>
           </div>
-          <CardDescription>Matched by mobile number, so one customer is never counted as new twice</CardDescription>
-        </CardHeader>
-        <CardContent className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {tiles.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setOpen(t.key)}
-              className="rounded-lg border bg-card p-3 text-left transition-colors hover:bg-accent"
-            >
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                {t.label} <t.icon className={`h-4 w-4 ${t.tone}`} />
-              </div>
-              <div className="mt-1 text-2xl font-semibold">{t.value}</div>
-            </button>
-          ))}
-          <div className="rounded-lg border bg-card p-3">
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              Repeat Rate <Percent className="h-4 w-4 text-primary" />
-            </div>
-            <div className="mt-1 text-2xl font-semibold">{(data?.repeatRate ?? 0).toFixed(1)}%</div>
-            <div className="mt-1 text-[11px] text-muted-foreground">
-              New {money(data?.newAmount ?? 0)} · Repeat {money(data?.repeatAmount ?? 0)}
+          <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-4">
+            {tiles.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setOpen(t.key)}
+                className="group min-w-0 rounded-xl bg-muted/60 px-3 py-2.5 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><t.icon className="h-3.5 w-3.5" /> {t.label}</span>
+                <span className="mt-0.5 block text-xl font-bold tabular-nums">{t.value}</span>
+                <span className="block truncate text-[11px] text-muted-foreground tabular-nums">{t.hint}</span>
+              </button>
+            ))}
+            <div className="min-w-0 rounded-xl bg-muted/60 px-3 py-2.5">
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><Percent className="h-3.5 w-3.5" /> Return rate</span>
+              <span className="mt-0.5 block text-xl font-bold tabular-nums">{rate.toFixed(0)}%</span>
+              <span className="mt-1.5 block h-1 overflow-hidden rounded-full bg-background"><span className="block h-full rounded-full bg-primary" style={{ width: `${Math.min(100, rate)}%` }} /></span>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       <Dialog open={open !== null} onOpenChange={(o) => !o && setOpen(null)}>
         <DialogContent className="max-w-3xl">
