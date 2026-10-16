@@ -125,7 +125,7 @@ type Supplier = { id: string; name: string; phone: string | null; balance_due: n
 type Invoice = {
   id: string; invoice_no: string; supplier_invoice_no: string | null; supplier_id: string | null;
   invoice_date: string; subtotal: number; discount: number; vat: number; freight: number;
-  total: number; paid: number; due: number; status: string; notes: string | null; created_at: string;
+  total: number; paid: number; due: number; status: string; credit_applied?: number | null; notes: string | null; created_at: string;
   suppliers?: { name: string } | null;
 };
 
@@ -193,6 +193,11 @@ function PurchasesPage() {
 
   const supplierDues = useMemo(() =>
     suppliers.filter(s => Number(s.balance_due) > 0).sort((a, b) => Number(b.balance_due) - Number(a.balance_due)),
+    [suppliers]
+  );
+  // Below 0 = the supplier holds our advance (overpaid, or returned goods not refunded).
+  const supplierAdvances = useMemo(() =>
+    suppliers.filter(s => Number(s.balance_due) < 0).sort((a, b) => Number(a.balance_due) - Number(b.balance_due)),
     [suppliers]
   );
 
@@ -321,6 +326,23 @@ function PurchasesPage() {
                   ))}
                 </TableBody>
               </Table>
+              {supplierAdvances.length > 0 && (
+                <div className="mt-6">
+                  <h4 className="mb-1 text-sm font-medium">Advance with suppliers</h4>
+                  <p className="mb-2 text-xs text-muted-foreground">Money the supplier holds for us (paid extra, or goods returned without a refund). It is used automatically on their next invoice.</p>
+                  <Table>
+                    <TableBody>
+                      {supplierAdvances.map(s => (
+                        <TableRow key={s.id}>
+                          <TableCell className="font-medium">{s.name}</TableCell>
+                          <TableCell className="text-muted-foreground">{s.phone ?? "—"}</TableCell>
+                          <TableCell className="text-right font-medium text-emerald-600">{fmt(Math.abs(Number(s.balance_due)))}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -880,6 +902,9 @@ function ViewInvoiceDialog({ invoiceId, onClose }: { invoiceId: string; onClose:
                 <div className="flex justify-between"><span>Freight</span><span>{fmt(Number(inv.freight))}</span></div>
                 <div className="flex justify-between font-semibold text-base border-t pt-1"><span>Total</span><span>{fmt(Number(inv.total))}</span></div>
                 <div className="flex justify-between text-emerald-600"><span>Paid</span><span>{fmt(Number(inv.paid))}</span></div>
+                {Number(inv.credit_applied) > 0 && (
+                  <div className="flex justify-between text-xs text-muted-foreground"><span>of which from supplier advance</span><span>{fmt(Number(inv.credit_applied))}</span></div>
+                )}
                 <div className="flex justify-between text-destructive font-medium"><span>Due</span><span>{fmt(Number(inv.due))}</span></div>
               </div>
             </div>
@@ -1154,7 +1179,7 @@ function SupplierPayDialog({ supplier, onDone }: { supplier: Supplier; onDone: (
     },
     onSuccess: ({ amt, ref, payId }) => {
       toast.success("Payment recorded");
-      const newBalance = Math.max(Number(supplier.balance_due) - amt, 0);
+      const newBalance = Number(supplier.balance_due) - amt;
       setReceipt({
         receipt_no: `RCPT-${String(payId).slice(0, 8).toUpperCase()}`,
         date: today(),
@@ -1248,7 +1273,7 @@ function DeleteInvoiceButton({ invoiceId, onDone }: { invoiceId: string; onDone:
       variant="ghost"
       title="Delete (admin)"
       onClick={() => {
-        if (confirm("Delete this invoice and reverse stock? This cannot be undone.")) del.mutate();
+        if (confirm("Delete this invoice and take its stock back out?\n\nAny money already paid on it stays with the supplier as advance (used on their next invoice). If some of the stock is already sold, use Return instead.\n\nThis cannot be undone.")) del.mutate();
       }}
     >
       <X className="h-4 w-4 text-destructive" />
