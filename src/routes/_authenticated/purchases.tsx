@@ -1,7 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Truck, Plus, Trash2, Eye, RotateCcw, Wallet, Printer, X, Barcode, Upload } from "lucide-react";
-import { PurchaseImportDialog, type ImportedLine } from "@/components/PurchaseImportDialog";
 import { BarcodeLabelDialog, type LabelProduct } from "@/components/BarcodeLabelDialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/PageHeader";
@@ -16,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import { ProductPicker } from "@/components/ProductPicker";
+import { PurchaseEntryDialog } from "@/components/PurchaseEntryDialog";
 
 
 export const Route = createFileRoute("/_authenticated/purchases")({
@@ -120,7 +119,7 @@ function printPaymentReceipt(r: PaymentReceipt) {
   w.document.close();
 }
 
-type Product = { id: string; name: string; sku: string | null; barcode: string | null; selling_price: number; purchase_price: number; stock_quantity: number };
+type Product = { id: string; name: string; sku: string | null; barcode: string | null; unit: string | null; selling_price: number; purchase_price: number; stock_quantity: number };
 type Supplier = { id: string; name: string; phone: string | null; balance_due: number };
 type Invoice = {
   id: string; invoice_no: string; supplier_invoice_no: string | null; supplier_id: string | null;
@@ -166,7 +165,7 @@ function PurchasesPage() {
     queryFn: async () => {
       const data = await fetchAll<any>(() => supabase
         .from("products")
-        .select("id,name,sku,barcode,selling_price,purchase_price,stock_quantity")
+        .select("id,name,sku,barcode,unit,selling_price,purchase_price,stock_quantity")
         .order("name")
         .order("id"));
       return (data ?? []) as Product[];
@@ -349,8 +348,9 @@ function PurchasesPage() {
       </Tabs>
 
       {openCreate && (
-        <CreateInvoiceDialog
+        <PurchaseEntryDialog
           open={openCreate}
+          refreshProducts={() => qc.refetchQueries({ queryKey: ["products-purchase"] })}
           onOpenChange={setOpenCreate}
           suppliers={suppliers}
           products={products}
@@ -411,324 +411,6 @@ function StatusBadge({ status }: { status: string }) {
   };
   const s = map[status] ?? { label: status, cls: "bg-slate-100 text-slate-800" };
   return <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${s.cls}`}>{s.label}</span>;
-}
-
-/* ---------------- Create Invoice ---------------- */
-
-type Row = {
-  product_id: string;
-  quantity: string;
-  purchase_price: string;
-  discount: string;
-  new_selling_price: string;
-  batch_no: string;
-  expiry_date: string;
-};
-
-const emptyRow = (): Row => ({
-  product_id: "", quantity: "1", purchase_price: "", discount: "0",
-  new_selling_price: "", batch_no: "", expiry_date: "",
-});
-
-function CreateInvoiceDialog({
-  open, onOpenChange, suppliers, products, onCreated, startWithUpload = false,
-}: {
-  open: boolean; onOpenChange: (v: boolean) => void;
-  suppliers: Supplier[]; products: Product[]; onCreated: (created?: { id: string; invoice_no?: string }) => void;
-  startWithUpload?: boolean;
-}) {
-  const qcInv = useQueryClient();
-  const [uploadOpen, setUploadOpen] = useState(startWithUpload);
-  const applyUpload = async (lines: ImportedLine[], created: number) => {
-    // New products must be in the list before their rows can show a name.
-    if (created) await qcInv.refetchQueries({ queryKey: ["products-purchase"] });
-    setRows((prev) => [...prev.filter((r) => r.product_id), ...lines]);
-  };
-  const [supplierId, setSupplierId] = useState<string>("");
-  const [supplierInvoiceNo, setSupplierInvoiceNo] = useState("");
-  const [invoiceDate, setInvoiceDate] = useState(today());
-  const [discount, setDiscount] = useState("0");
-  const [vat, setVat] = useState("0");
-  const [freight, setFreight] = useState("0");
-  const [paid, setPaid] = useState("0");
-  const [method, setMethod] = useState<string>("cash");
-  const [notes, setNotes] = useState("");
-  const [rows, setRows] = useState<Row[]>([emptyRow()]);
-
-  const subtotal = useMemo(() =>
-    rows.reduce((a, r) => {
-      const q = Number(r.quantity) || 0;
-      const p = Number(r.purchase_price) || 0;
-      const d = Number(r.discount) || 0;
-      return a + (q * p - d);
-    }, 0), [rows]);
-
-  const total = subtotal - (Number(discount) || 0) + (Number(vat) || 0) + (Number(freight) || 0);
-  const due = Math.max(total - (Number(paid) || 0), 0);
-  const validRows = rows.filter(r => r.product_id && Number(r.quantity) > 0 && Number(r.purchase_price) >= 0);
-
-  const create = useMutation({
-    mutationFn: async () => {
-      if (validRows.length === 0) throw new Error("Add at least one item");
-      const paidNum = Number(paid) || 0;
-      if ([discount, vat, freight, paid].some((v) => (Number(v) || 0) < 0)) {
-        throw new Error("Discount, VAT, freight and paid cannot be negative");
-      }
-      if (total < 0) throw new Error("Discount is larger than the invoice amount");
-      // Paying more than the bill made the supplier balance go negative and
-      // took the extra money out of the drawer.
-      if (paidNum > total + 0.009) throw new Error(`Paid cannot exceed the invoice total (৳${total.toFixed(2)})`);
-      const { data, error } = await supabase.rpc("create_purchase_invoice" as any, {
-        _supplier_id: supplierId || null,
-        _supplier_invoice_no: supplierInvoiceNo || null,
-        _invoice_date: invoiceDate,
-        _items: validRows.map(r => ({
-          product_id: r.product_id,
-          quantity: Number(r.quantity),
-          purchase_price: Number(r.purchase_price),
-          discount: Number(r.discount) || 0,
-          new_selling_price: r.new_selling_price ? Number(r.new_selling_price) : null,
-          batch_no: r.batch_no || null,
-          expiry_date: r.expiry_date || null,
-        })),
-        _discount: Number(discount) || 0,
-        _vat: Number(vat) || 0,
-        _freight: Number(freight) || 0,
-        _paid: Number(paid) || 0,
-        _payment_method: method as any,
-        _notes: notes || null,
-      });
-      if (error) throw error;
-      return data as any;
-    },
-    onSuccess: (data) => {
-      toast.success(`Invoice ${data?.invoice_no} created`);
-      onCreated(data ? { id: data.id, invoice_no: data.invoice_no } : undefined);
-      onOpenChange(false);
-    },
-    onError: (e: any) => toast.error(e.message ?? "Failed"),
-  });
-
-  const updateRow = (i: number, patch: Partial<Row>) =>
-    setRows(rows.map((r, idx) => idx === i ? { ...r, ...patch } : r));
-
-  const pickProduct = (i: number, pid: string) => {
-    const p = products.find(x => x.id === pid);
-    updateRow(i, {
-      product_id: pid,
-      purchase_price: p ? String(p.purchase_price ?? 0) : "",
-      new_selling_price: p ? String(p.selling_price ?? "") : "",
-    });
-  };
-
-  // quick add: search a product and it lands as a new row (or bumps qty if already added)
-  const quickAdd = (p: { id: string; name: string; purchase_price?: number | null; selling_price?: number | null }) => {
-    const existing = rows.findIndex(r => r.product_id === p.id);
-    if (existing >= 0) {
-      updateRow(existing, { quantity: String((Number(rows[existing].quantity) || 0) + 1) });
-      toast.success(`${p.name} qty +1`);
-      return;
-    }
-    const newRow: Row = {
-      ...emptyRow(),
-      product_id: p.id,
-      purchase_price: String(p.purchase_price ?? 0),
-      new_selling_price: String(p.selling_price ?? ""),
-    };
-    // replace a leading empty row instead of leaving a blank line behind
-    setRows(prev => {
-      const blank = prev.findIndex(r => !r.product_id);
-      if (blank >= 0) return prev.map((r, i) => (i === blank ? newRow : r));
-      return [...prev, newRow];
-    });
-    toast.success(`${p.name} added`);
-  };
-
-  const [scan, setScan] = useState("");
-  const handleScan = (raw: string) => {
-    const code = raw.trim();
-    if (!code) return;
-    const key = code.toLowerCase();
-    const p = products.find(
-      x => (x.barcode ?? "").toLowerCase() === key || (x.sku ?? "").toLowerCase() === key,
-    );
-    setScan("");
-    if (!p) {
-      toast.error(`No product for barcode ${code}`);
-      return;
-    }
-    quickAdd(p);
-  };
-
-
-
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl max-h-[92vh] overflow-y-auto">
-        <DialogHeader><DialogTitle>New Purchase Invoice</DialogTitle></DialogHeader>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div>
-            <Label>Supplier</Label>
-            <Select value={supplierId} onValueChange={setSupplierId}>
-              <SelectTrigger><SelectValue placeholder="Choose supplier" /></SelectTrigger>
-              <SelectContent>
-                {suppliers.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label>Supplier Invoice #</Label>
-            <Input value={supplierInvoiceNo} onChange={e => setSupplierInvoiceNo(e.target.value)} placeholder="e.g. INV-1023" />
-          </div>
-          <div>
-            <Label>Invoice Date</Label>
-            <Input type="date" value={invoiceDate} onChange={e => setInvoiceDate(e.target.value)} />
-          </div>
-        </div>
-
-        <div className="mt-4 rounded-lg border bg-muted/40 p-3 space-y-3">
-          <div>
-            <Label className="mb-1 block text-xs">Barcode scan (scanning adds the product)</Label>
-            <Input
-              autoFocus
-              value={scan}
-              onChange={e => setScan(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  handleScan(scan);
-                }
-              }}
-              placeholder="Scan / type barcode then Enter…"
-            />
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs text-muted-foreground">Have the supplier&apos;s list in Excel? Upload it — you will see and edit every row before it is added.</p>
-            <Button type="button" size="sm" variant="outline" className="bg-background" onClick={() => setUploadOpen(true)}>
-              <Upload className="h-4 w-4 mr-1" /> Upload Excel / CSV
-            </Button>
-          </div>
-          <div>
-            <Label className="mb-1 block text-xs">Quick add product (search by name / SKU / barcode)</Label>
-            <ProductPicker
-              products={products}
-              quickAdd
-              placeholder="Search product to add…"
-              onSelect={quickAdd}
-            />
-          </div>
-        </div>
-
-
-        <div className="mt-4 border rounded-lg overflow-x-auto">
-
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="min-w-[220px]">Product</TableHead>
-                <TableHead className="w-24">Qty</TableHead>
-                <TableHead className="w-28">Cost ৳</TableHead>
-                <TableHead className="w-24">Line Disc</TableHead>
-                <TableHead className="w-28">New Sell ৳</TableHead>
-                <TableHead className="w-28">Batch</TableHead>
-                <TableHead className="w-36">Expiry</TableHead>
-                <TableHead className="w-24 text-right">Line Total</TableHead>
-                <TableHead className="w-10"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((r, i) => {
-                const lineTotal = (Number(r.quantity) || 0) * (Number(r.purchase_price) || 0) - (Number(r.discount) || 0);
-                return (
-                  <TableRow key={i}>
-                    <TableCell>
-                      <ProductPicker
-                        products={products}
-                        value={r.product_id}
-                        onSelect={(p) => pickProduct(i, p.id)}
-                        placeholder="Search product…"
-                      />
-
-                    </TableCell>
-                    <TableCell><Input value={r.quantity} onChange={e => updateRow(i, { quantity: e.target.value })} /></TableCell>
-                    <TableCell><Input value={r.purchase_price} onChange={e => updateRow(i, { purchase_price: e.target.value })} /></TableCell>
-                    <TableCell><Input value={r.discount} onChange={e => updateRow(i, { discount: e.target.value })} /></TableCell>
-                    <TableCell><Input value={r.new_selling_price} onChange={e => updateRow(i, { new_selling_price: e.target.value })} /></TableCell>
-                    <TableCell><Input value={r.batch_no} onChange={e => updateRow(i, { batch_no: e.target.value })} /></TableCell>
-                    <TableCell><Input type="date" value={r.expiry_date} onChange={e => updateRow(i, { expiry_date: e.target.value })} /></TableCell>
-                    <TableCell className="text-right">{fmt(lineTotal)}</TableCell>
-                    <TableCell>
-                      <Button size="icon" variant="ghost" onClick={() => setRows(rows.filter((_, idx) => idx !== i))}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
-
-        <div className="mt-2">
-          <Button variant="outline" size="sm" onClick={() => setRows([...rows, emptyRow()])}>
-            <Plus className="h-4 w-4 mr-1" /> Add Row
-          </Button>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-          <div>
-            <Label>Notes</Label>
-            <Textarea value={notes} onChange={e => setNotes(e.target.value)} rows={4} />
-          </div>
-          <div className="space-y-2 rounded-lg border p-3 bg-muted/30">
-            <Row2 label="Subtotal" value={fmt(subtotal)} />
-            <div className="grid grid-cols-3 gap-2 items-center">
-              <Label>Overall Disc</Label>
-              <Input value={discount} onChange={e => setDiscount(e.target.value)} className="col-span-2" />
-            </div>
-            <div className="grid grid-cols-3 gap-2 items-center">
-              <Label>VAT</Label>
-              <Input value={vat} onChange={e => setVat(e.target.value)} className="col-span-2" />
-            </div>
-            <div className="grid grid-cols-3 gap-2 items-center">
-              <Label>Freight</Label>
-              <Input value={freight} onChange={e => setFreight(e.target.value)} className="col-span-2" />
-            </div>
-            <Row2 label="Grand Total" value={fmt(total)} strong />
-            <div className="grid grid-cols-3 gap-2 items-center">
-              <Label>Paid Now</Label>
-              <Input value={paid} onChange={e => setPaid(e.target.value)} className="col-span-2" />
-            </div>
-            <div className="grid grid-cols-3 gap-2 items-center">
-              <Label>Method</Label>
-              <Select value={method} onValueChange={setMethod}>
-                <SelectTrigger className="col-span-2"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="cash">Cash</SelectItem>
-                  <SelectItem value="card">Card</SelectItem>
-                  <SelectItem value="mobile_banking">Mobile Banking</SelectItem>
-                  <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
-                  <SelectItem value="due">Due (no payment)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <Row2 label="Due" value={fmt(due)} danger />
-          </div>
-        </div>
-
-        <PurchaseImportDialog open={uploadOpen} onOpenChange={setUploadOpen} products={products} onApply={applyUpload} />
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={() => create.mutate()} disabled={create.isPending || validRows.length === 0}>
-            {create.isPending ? "Saving..." : "Save Invoice"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
 }
 
 function Row2({ label, value, strong, danger }: { label: string; value: string; strong?: boolean; danger?: boolean }) {
