@@ -33,6 +33,7 @@ export const MODULES: ModuleDef[] = [
   { key: "product_sales", label: "Product Sales", url: "/product-sales", group: "Business" },
   { key: "reports", label: "Reports", url: "/reports", group: "Business" },
   { key: "crm", label: "CRM", url: "/crm", group: "Business" },
+  { key: "hr", label: "HR & Salary", url: "/hr", group: "Business" },
   { key: "staff", label: "Staff & Permissions", url: "/staff", group: "Business" },
   { key: "settings", label: "Settings", url: "/settings", group: "Business" },
 ];

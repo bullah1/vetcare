@@ -25,6 +25,7 @@ import {
   Brain,
   ReceiptText,
   PackageSearch,
+  IdCard,
 } from "lucide-react";
 import {
   Sidebar,
@@ -68,6 +69,7 @@ const ICONS: Record<string, typeof Users> = {
   business_report: LineChart,
   reports: BarChart3,
   crm: Users,
+  hr: IdCard,
   staff: ShieldCheck,
   settings: Settings,
 };

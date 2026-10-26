@@ -27,6 +27,7 @@ import { Route as AuthenticatedDashboardRouteImport } from './routes/_authentica
 import { Route as AuthenticatedDeliveriesRouteImport } from './routes/_authenticated/deliveries'
 import { Route as AuthenticatedDeliveryReportRouteImport } from './routes/_authenticated/delivery-report'
 import { Route as AuthenticatedDueBillsRouteImport } from './routes/_authenticated/due-bills'
+import { Route as AuthenticatedHrRouteImport } from './routes/_authenticated/hr'
 import { Route as AuthenticatedInventoryRouteImport } from './routes/_authenticated/inventory'
 import { Route as AuthenticatedMedicalRouteImport } from './routes/_authenticated/medical'
 import { Route as AuthenticatedPendingBillsRouteImport } from './routes/_authenticated/pending-bills'
@@ -141,6 +142,11 @@ const AuthenticatedDueBillsRoute = AuthenticatedDueBillsRouteImport.update({
   path: '/due-bills',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedHrRoute = AuthenticatedHrRouteImport.update({
+  id: '/hr',
+  path: '/hr',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedInventoryRoute = AuthenticatedInventoryRouteImport.update({
   id: '/inventory',
   path: '/inventory',
@@ -247,6 +253,7 @@ export interface FileRoutesByFullPath {
   '/deliveries': typeof AuthenticatedDeliveriesRoute
   '/delivery-report': typeof AuthenticatedDeliveryReportRoute
   '/due-bills': typeof AuthenticatedDueBillsRoute
+  '/hr': typeof AuthenticatedHrRoute
   '/inventory': typeof AuthenticatedInventoryRoute
   '/medical': typeof AuthenticatedMedicalRoute
   '/pending-bills': typeof AuthenticatedPendingBillsRoute
@@ -282,6 +289,7 @@ export interface FileRoutesByTo {
   '/deliveries': typeof AuthenticatedDeliveriesRoute
   '/delivery-report': typeof AuthenticatedDeliveryReportRoute
   '/due-bills': typeof AuthenticatedDueBillsRoute
+  '/hr': typeof AuthenticatedHrRoute
   '/inventory': typeof AuthenticatedInventoryRoute
   '/medical': typeof AuthenticatedMedicalRoute
   '/pending-bills': typeof AuthenticatedPendingBillsRoute
@@ -319,6 +327,7 @@ export interface FileRoutesById {
   '/_authenticated/deliveries': typeof AuthenticatedDeliveriesRoute
   '/_authenticated/delivery-report': typeof AuthenticatedDeliveryReportRoute
   '/_authenticated/due-bills': typeof AuthenticatedDueBillsRoute
+  '/_authenticated/hr': typeof AuthenticatedHrRoute
   '/_authenticated/inventory': typeof AuthenticatedInventoryRoute
   '/_authenticated/medical': typeof AuthenticatedMedicalRoute
   '/_authenticated/pending-bills': typeof AuthenticatedPendingBillsRoute
@@ -356,6 +365,7 @@ export interface FileRouteTypes {
     | '/deliveries'
     | '/delivery-report'
     | '/due-bills'
+    | '/hr'
     | '/inventory'
     | '/medical'
     | '/pending-bills'
@@ -391,6 +401,7 @@ export interface FileRouteTypes {
     | '/deliveries'
     | '/delivery-report'
     | '/due-bills'
+    | '/hr'
     | '/inventory'
     | '/medical'
     | '/pending-bills'
@@ -427,6 +438,7 @@ export interface FileRouteTypes {
     | '/_authenticated/deliveries'
     | '/_authenticated/delivery-report'
     | '/_authenticated/due-bills'
+    | '/_authenticated/hr'
     | '/_authenticated/inventory'
     | '/_authenticated/medical'
     | '/_authenticated/pending-bills'
@@ -580,6 +592,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDueBillsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/hr': {
+      id: '/_authenticated/hr'
+      path: '/hr'
+      fullPath: '/hr'
+      preLoaderRoute: typeof AuthenticatedHrRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/inventory': {
       id: '/_authenticated/inventory'
       path: '/inventory'
@@ -711,6 +730,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedDeliveriesRoute: typeof AuthenticatedDeliveriesRoute
   AuthenticatedDeliveryReportRoute: typeof AuthenticatedDeliveryReportRoute
   AuthenticatedDueBillsRoute: typeof AuthenticatedDueBillsRoute
+  AuthenticatedHrRoute: typeof AuthenticatedHrRoute
   AuthenticatedInventoryRoute: typeof AuthenticatedInventoryRoute
   AuthenticatedMedicalRoute: typeof AuthenticatedMedicalRoute
   AuthenticatedPendingBillsRoute: typeof AuthenticatedPendingBillsRoute
@@ -745,6 +765,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedDeliveriesRoute: AuthenticatedDeliveriesRoute,
   AuthenticatedDeliveryReportRoute: AuthenticatedDeliveryReportRoute,
   AuthenticatedDueBillsRoute: AuthenticatedDueBillsRoute,
+  AuthenticatedHrRoute: AuthenticatedHrRoute,
   AuthenticatedInventoryRoute: AuthenticatedInventoryRoute,
   AuthenticatedMedicalRoute: AuthenticatedMedicalRoute,
   AuthenticatedPendingBillsRoute: AuthenticatedPendingBillsRoute,
