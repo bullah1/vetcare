@@ -17,7 +17,8 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
@@ -600,15 +601,35 @@ function POSPage() {
 
   // O(1) scan lookup: barcode/SKU maps built once per catalog load instead of
   // scanning the whole product array on every Enter from the scanner.
+  // Every product per code is kept: two products can share one barcode, and then
+  // the cashier picks which one (instead of the first one being added silently).
   const scanMaps = useMemo(() => {
-    const byBarcode = new Map<string, Product>();
-    const bySku = new Map<string, Product>();
+    const byBarcode = new Map<string, Product[]>();
+    const bySku = new Map<string, Product[]>();
+    const push = (m: Map<string, Product[]>, k: string, p: Product) => {
+      const a = m.get(k);
+      if (a) a.push(p); else m.set(k, [p]);
+    };
     for (const it of index) {
-      if (it.bc && !byBarcode.has(it.bc)) byBarcode.set(it.bc, it.p);
-      if (it.sku && !bySku.has(it.sku)) bySku.set(it.sku, it.p);
+      if (it.bc) push(byBarcode, it.bc, it.p);
+      if (it.sku) push(bySku, it.sku, it.p);
     }
     return { byBarcode, bySku };
   }, [index]);
+  /** Every product whose barcode or SKU is exactly this code (one product counted once). */
+  const codeHits = useCallback((code: string): Product[] => {
+    const all = [...(scanMaps.byBarcode.get(code) ?? []), ...(scanMaps.bySku.get(code) ?? [])];
+    return all.filter((p, i) => all.findIndex((q) => q.id === p.id) === i);
+  }, [scanMaps]);
+  // Same-barcode chooser: picking a product adds it to the cart straight away.
+  const [dupPick, setDupPick] = useState<{ code: string; list: Product[] } | null>(null);
+  const [dupHi, setDupHi] = useState(0);
+  const openDupPick = (code: string, list: Product[]) => {
+    // In-stock products first, so the usual choice is on top.
+    const sorted = [...list].sort((a, b) => Number(b.stock_quantity > 0) - Number(a.stock_quantity > 0));
+    setDupHi(0);
+    setDupPick({ code, list: sorted });
+  };
 
   // Deferred query keeps typing/scanning responsive while the grid catches up.
   const deferredQ = useDeferredValue(q);
@@ -818,14 +839,19 @@ function POSPage() {
 
     // 1) Exact barcode, 2) exact SKU — both O(1) map hits. Scanned codes are
     // added straight away (qty 1): a scanner cannot type a quantity.
-    let target: Product | null =
-      scanMaps.byBarcode.get(norm) ?? scanMaps.bySku.get(norm) ?? null;
+    const hits = codeHits(norm);
+    if (hits.length > 1) {
+      setQ("");
+      openDupPick(raw, hits);
+      return;
+    }
+    let target: Product | null = hits[0] ?? null;
     // 3) Unique SKU prefix (short internal codes typed by staff).
     if (!target) {
       let hit: Product | null = null;
       let count = 0;
-      for (const [sku, p] of scanMaps.bySku) {
-        if (sku.startsWith(norm)) { hit = p; if (++count > 1) break; }
+      for (const [sku, ps] of scanMaps.bySku) {
+        if (sku.startsWith(norm)) { hit = ps[0]; count += ps.length; if (count > 1) break; }
       }
       if (count === 1) target = hit;
     }
@@ -847,7 +873,7 @@ function POSPage() {
       return;
     }
     openQty(pick); // Product → Enter → Quantity pop-up → Enter
-  }, [scanMaps, addToCart, deferredQ, cart.length, searchProducts]);
+  }, [scanMaps, codeHits, addToCart, deferredQ, cart.length, searchProducts]);
 
 
 
@@ -1661,8 +1687,9 @@ function POSPage() {
                   if (e.key !== "Enter") return;
                   e.preventDefault();
                   const raw = e.currentTarget.value.replace(/\s+/g, "").toLowerCase();
-                  const target =
-                    scanMaps.byBarcode.get(raw) ?? scanMaps.bySku.get(raw) ?? sheetResults[0]?.p ?? null;
+                  const hits = codeHits(raw);
+                  if (hits.length > 1) { openDupPick(e.currentTarget.value.trim(), hits); setSheetQ(""); return; }
+                  const target = hits[0] ?? sheetResults[0]?.p ?? null;
                   if (target) { addToCart(target); setSheetQ(""); }
                   else toast.error(`No product for "${e.currentTarget.value.trim()}"`);
                 }}
@@ -1837,6 +1864,71 @@ function POSPage() {
               </button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Same barcode on more than one product: pick one → added to the cart */}
+      <Dialog open={!!dupPick} onOpenChange={(o) => { if (!o) { setDupPick(null); focusSearch(); } }}>
+        <DialogContent
+          className="max-w-md"
+          onCloseAutoFocus={(e) => e.preventDefault()}
+          onKeyDown={(e) => {
+            if (!dupPick) return;
+            const n = dupPick.list.length;
+            const add = (p: Product) => {
+              e.preventDefault();
+              addToCart(p);
+              setDupPick(null);
+              focusSearch();
+              if (!isDesktop()) setCartOpen(true);
+            };
+            if (e.key === "ArrowDown") { e.preventDefault(); setDupHi((h) => Math.min(n - 1, h + 1)); }
+            else if (e.key === "ArrowUp") { e.preventDefault(); setDupHi((h) => Math.max(0, h - 1)); }
+            else if (e.key === "Enter") add(dupPick.list[Math.min(dupHi, n - 1)]);
+            else if (/^[1-9]$/.test(e.key) && Number(e.key) <= n) add(dupPick.list[Number(e.key) - 1]);
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Same barcode on {dupPick?.list.length} products</DialogTitle>
+            <DialogDescription>
+              Code <span className="font-mono text-foreground">{dupPick?.code}</span>. Pick the one to add — click, or press its number.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            {dupPick?.list.map((p, i) => {
+              const inCart = cart.find((l) => l.product_id === p.id)?.quantity ?? 0;
+              const out = Number(p.stock_quantity) <= 0;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  autoFocus={i === 0}
+                  onMouseEnter={() => setDupHi(i)}
+                  onFocus={() => setDupHi(i)}
+                  onClick={() => {
+                    addToCart(p);
+                    setDupPick(null);
+                    focusSearch();
+                    if (!isDesktop()) setCartOpen(true);
+                  }}
+                  className={cn(
+                    "flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors focus-visible:outline-none",
+                    i === dupHi ? "border-primary bg-accent" : "hover:bg-muted",
+                  )}
+                >
+                  <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-sm font-semibold", i === dupHi ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>{i + 1}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">{p.name.trim()}</span>
+                    <span className={cn("block text-xs", out ? "text-destructive" : "text-muted-foreground")}>
+                      Stock {Number(p.stock_quantity)}{p.unit ? ` ${p.unit}` : ""}{p.sku ? `   SKU ${p.sku}` : ""}{inCart ? `   ${inCart} in cart` : ""}
+                    </span>
+                  </span>
+                  <span className="shrink-0 font-semibold tabular-nums">৳{Number(p.selling_price).toFixed(2)}</span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">Tip: give each product its own barcode in Inventory to skip this step.</p>
         </DialogContent>
       </Dialog>
 
