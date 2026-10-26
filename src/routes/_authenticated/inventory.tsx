@@ -569,11 +569,23 @@ function ProductDialog({ product, onDone }: { product: Product | null; onDone: (
   const hasB2bCols = !product || "wholesale_price" in (product as any);
   const [wholesale, setWholesale] = useState<string>((product as any)?.wholesale_price != null ? String((product as any).wholesale_price) : "");
   const [minPrice, setMinPrice] = useState<string>((product as any)?.min_selling_price != null ? String((product as any).min_selling_price) : "");
+  // Editing stock: saved through adjust_stock so it shows in Stock Adjustments.
+  const openStock = Number(product?.stock_quantity ?? 0);
+  const [stockText, setStockText] = useState<string>(String(openStock));
+  const [stockReason, setStockReason] = useState<string>("correction");
+  const [stockNote, setStockNote] = useState("");
+  const newStock = stockText.trim() === "" ? NaN : Number(stockText);
+  const stockChanged = !!product && Number.isFinite(newStock) && newStock !== openStock;
 
   const save = useMutation({
     mutationFn: async () => {
+      if (product && !(Number.isFinite(newStock) && newStock >= 0)) throw new Error("Stock must be 0 or more");
+      const { stock_quantity: _openingStock, ...rest } = form;
       const payload: any = {
-        ...form,
+        ...rest,
+        // New product: opening stock. Edit: never write stock here — it may have
+        // changed since this window opened (a sale); stock changes go through adjust_stock.
+        ...(product ? {} : { stock_quantity: form.stock_quantity }),
         sku: form.sku?.trim() ? form.sku.trim() : null,
         barcode: form.barcode?.trim() ? form.barcode.trim() : null,
         dose_form: form.is_prescribable ? form.dose_form : null,
@@ -593,6 +605,23 @@ function ProductDialog({ product, onDone }: { product: Product | null; onDone: (
         if (error) throw error;
         id = data.id;
       }
+      if (product && stockChanged) {
+        const { data: fresh, error: fe } = await supabase.from("products").select("stock_quantity").eq("id", product.id).single();
+        if (fe) throw fe;
+        const current = Number(fresh.stock_quantity);
+        if (current !== openStock && !confirm(`Stock changed to ${current} while you were editing (a sale or purchase). Set it to ${newStock} anyway?`)) {
+          throw new Error("Product details saved. Stock was not changed — check it and try again.");
+        }
+        if (current !== newStock) {
+          const { error: ae } = await supabase.rpc("adjust_stock" as never, {
+            _product_id: product.id,
+            _quantity_change: newStock - current,
+            _reason: stockReason,
+            _notes: `Set to ${newStock} from Edit product${stockNote.trim() ? ` — ${stockNote.trim()}` : ""}`,
+          } as never);
+          if (ae) throw new Error(`Product details saved, but stock was not: ${ae.message}`);
+        }
+      }
       const changed = w !== ((product as any)?.wholesale_price ?? null) || mn !== ((product as any)?.min_selling_price ?? null);
       if (id && hasB2bCols && changed) {
         const { error } = await (supabase as any).from("products").update({ wholesale_price: w, min_selling_price: mn }).eq("id", id);
@@ -600,9 +629,10 @@ function ProductDialog({ product, onDone }: { product: Product | null; onDone: (
       }
     },
     onSuccess: () => {
-      toast.success(product ? "Product updated" : "Product created");
+      toast.success(product ? (stockChanged ? `Product updated, stock set to ${newStock}` : "Product updated") : "Product created");
       qc.invalidateQueries({ queryKey: ["products"] });
       qc.invalidateQueries({ queryKey: ["pos-products"] });
+      if (stockChanged) refreshAppData();
       onDone();
     },
     onError: (e: Error) => toast.error(e.message),
@@ -724,10 +754,44 @@ function ProductDialog({ product, onDone }: { product: Product | null; onDone: (
           <Label>Low stock threshold</Label>
           <Input type="number" value={form.low_stock_threshold} onChange={(e) => setForm({ ...form, low_stock_threshold: Number(e.target.value) })} />
         </div>
-        {!product && (
+        {!product ? (
           <div className="space-y-2 sm:col-span-2">
             <Label>Opening stock</Label>
             <Input type="number" value={form.stock_quantity} onChange={(e) => setForm({ ...form, stock_quantity: Number(e.target.value) })} />
+          </div>
+        ) : (
+          <div className="space-y-3 rounded-md border p-3 sm:col-span-2">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Stock ({form.unit || "pcs"})</Label>
+                <Input type="number" min={0} step="any" inputMode="decimal" value={stockText} onChange={(e) => setStockText(e.target.value)} />
+                <p className="text-[11px] text-muted-foreground">
+                  Now {openStock}.{" "}
+                  {stockChanged
+                    ? <b className={newStock > openStock ? "text-emerald-600" : "text-destructive"}>{newStock > openStock ? "+" : ""}{Number((newStock - openStock).toFixed(2))} will be recorded in Stock Adjustments.</b>
+                    : "Change it to set the counted stock."}
+                </p>
+              </div>
+              {stockChanged && (
+                <div className="space-y-2">
+                  <Label>Reason</Label>
+                  <Select value={stockReason} onValueChange={setStockReason}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="correction">Manual correction</SelectItem>
+                      <SelectItem value="found">Found / extra</SelectItem>
+                      <SelectItem value="damage">Damaged / broken</SelectItem>
+                      <SelectItem value="loss">Lost / missing</SelectItem>
+                      <SelectItem value="expired">Expired</SelectItem>
+                      <SelectItem value="other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
+            {stockChanged && (
+              <Input value={stockNote} onChange={(e) => setStockNote(e.target.value)} placeholder="Note (optional), e.g. counted on shelf" maxLength={300} />
+            )}
           </div>
         )}
         <div className="space-y-2 sm:col-span-2">
