@@ -7,6 +7,7 @@ import {
   IdCard, Plus, Pencil, ChevronLeft, ChevronRight, Phone, Clock, CalendarOff, UserCheck, FileDown, Printer, Trash2, Banknote, CheckCircle2,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/lib/auth-context";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -108,6 +109,9 @@ function useSetAttendance() {
 
 function HRPage() {
   const today = todayDhaka();
+  const { hasRole } = useAuth();
+  // Admin can change anything (any day, salary, staff); others mark today's attendance only.
+  const isAdmin = hasRole("admin");
   const [tab, setTab] = useState("attendance");
   const [editing, setEditing] = useState<Employee | null | "new">(null);
   const [profile, setProfile] = useState<Employee | null>(null);
@@ -120,7 +124,7 @@ function HRPage() {
         title="HR & Salary"
         description="Staff, duty time, attendance and monthly salary"
         icon={IdCard}
-        actions={!setupMissing && <Button onClick={() => setEditing("new")}><Plus className="h-4 w-4" /> Add staff</Button>}
+        actions={!setupMissing && isAdmin && <Button onClick={() => setEditing("new")}><Plus className="h-4 w-4" /> Add staff</Button>}
       />
 
       {setupMissing ? (
@@ -134,8 +138,8 @@ function HRPage() {
       ) : employees.length === 0 ? (
         <div className="rounded-xl border border-dashed p-10 text-center">
           <p className="font-medium">No staff added yet</p>
-          <p className="mt-1 text-sm text-muted-foreground">Add your staff with their salary, duty time and weekly off day.</p>
-          <Button className="mt-4" onClick={() => setEditing("new")}><Plus className="h-4 w-4" /> Add staff</Button>
+          <p className="mt-1 text-sm text-muted-foreground">{isAdmin ? "Add your staff with their salary, duty time and weekly off day." : "An admin adds staff here."}</p>
+          {isAdmin && <Button className="mt-4" onClick={() => setEditing("new")}><Plus className="h-4 w-4" /> Add staff</Button>}
         </div>
       ) : (
         <Tabs value={tab} onValueChange={setTab}>
@@ -144,9 +148,9 @@ function HRPage() {
             <TabsTrigger value="staff">Staff</TabsTrigger>
             <TabsTrigger value="salary">Salary</TabsTrigger>
           </TabsList>
-          <TabsContent value="attendance"><AttendanceTab employees={employees} today={today} onOpen={setProfile} /></TabsContent>
-          <TabsContent value="staff"><StaffTab employees={employees} today={today} onOpen={setProfile} onEdit={setEditing} /></TabsContent>
-          <TabsContent value="salary"><SalaryTab employees={employees} today={today} onOpen={setProfile} /></TabsContent>
+          <TabsContent value="attendance"><AttendanceTab employees={employees} today={today} onOpen={setProfile} isAdmin={isAdmin} /></TabsContent>
+          <TabsContent value="staff"><StaffTab employees={employees} today={today} onOpen={setProfile} onEdit={isAdmin ? setEditing : undefined} /></TabsContent>
+          <TabsContent value="salary"><SalaryTab employees={employees} today={today} onOpen={setProfile} isAdmin={isAdmin} /></TabsContent>
         </Tabs>
       )}
 
@@ -155,8 +159,9 @@ function HRPage() {
         <ProfileDialog
           employee={employees.find((e) => e.id === profile.id) ?? profile}
           today={today}
+          isAdmin={isAdmin}
           onClose={() => setProfile(null)}
-          onEdit={(e) => { setProfile(null); setEditing(e); }}
+          onEdit={isAdmin ? (e) => { setProfile(null); setEditing(e); } : undefined}
         />
       )}
     </div>
@@ -165,7 +170,7 @@ function HRPage() {
 
 /* ------------------------------------------------------------ attendance */
 
-function AttendanceTab({ employees, today, onOpen }: { employees: Employee[]; today: string; onOpen: (e: Employee) => void }) {
+function AttendanceTab({ employees, today, onOpen, isAdmin }: { employees: Employee[]; today: string; onOpen: (e: Employee) => void; isAdmin: boolean }) {
   const [date, setDate] = useState(today);
   const month = date.slice(0, 7);
   const { data } = useMonthData(month);
@@ -175,6 +180,7 @@ function AttendanceTab({ employees, today, onOpen }: { employees: Employee[]; to
   const wd = weekday(date);
   const counts = STATUS_ORDER.map((s) => [s, active.filter((e) => byEmp.get(e.id)?.status === s).length] as const);
   const unmarked = active.filter((e) => !byEmp.get(e.id) && !(e.weekly_off ?? []).includes(wd));
+  const canEdit = isAdmin || date === today;
 
   const mark = (e: Employee, s: AttendanceStatus) => {
     const cur = byEmp.get(e.id);
@@ -203,7 +209,7 @@ function AttendanceTab({ employees, today, onOpen }: { employees: Employee[]; to
             <span key={s} className="rounded-full bg-muted px-2 py-0.5"><b>{n}</b> {STATUS_META[s].label}</span>
           ))}
           {unmarked.length > 0 && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200"><b>{unmarked.length}</b> not marked</span>}
-          {unmarked.length > 0 && (
+          {unmarked.length > 0 && canEdit && (
             <Button size="sm" className="h-7" onClick={markAllPresent} disabled={setAtt.isPending}>
               <UserCheck className="h-3.5 w-3.5" /> Mark all present
             </Button>
@@ -229,11 +235,12 @@ function AttendanceTab({ employees, today, onOpen }: { employees: Employee[]; to
                   {[e.designation, dutyText(e), a?.check_in && `In ${fmtTime(a.check_in)}`].filter(Boolean).join("   ")}
                 </span>
               </button>
-              <StatusButtons value={a?.status ?? null} onPick={(s) => mark(e, s)} disabled={setAtt.isPending} />
+              <StatusButtons value={a?.status ?? null} onPick={(s) => mark(e, s)} disabled={setAtt.isPending || !canEdit} />
             </div>
           );
         })}
       </div>
+      {!canEdit && <p className="rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground">Only an admin can change a past day. You can mark today&apos;s attendance.</p>}
       <p className="text-xs text-muted-foreground">A working day left unmarked counts as absent (one day's pay cut) once the day is over. Tap a status to mark it, tap it again to clear. Present on today records the check-in time; checking in more than 10 minutes after duty start shows as Late (no salary cut).</p>
     </div>
   );
@@ -264,7 +271,7 @@ function StatusButtons({ value, onPick, disabled, compact }: { value: Attendance
 
 /* ----------------------------------------------------------------- staff */
 
-function StaffTab({ employees, today, onOpen, onEdit }: { employees: Employee[]; today: string; onOpen: (e: Employee) => void; onEdit: (e: Employee) => void }) {
+function StaffTab({ employees, today, onOpen, onEdit }: { employees: Employee[]; today: string; onOpen: (e: Employee) => void; onEdit?: (e: Employee) => void }) {
   const [showInactive, setShowInactive] = useState(false);
   const month = today.slice(0, 7);
   const { data } = useMonthData(month);
@@ -284,7 +291,7 @@ function StaffTab({ employees, today, onOpen, onEdit }: { employees: Employee[];
                   <span className="block truncate font-semibold hover:underline">{e.full_name}</span>
                   <span className="block truncate text-xs text-muted-foreground">{e.designation || "Staff"}{!e.is_active && " · left"}</span>
                 </button>
-                <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => onEdit(e)} aria-label={`Edit ${e.full_name}`}><Pencil className="h-4 w-4" /></Button>
+                {onEdit && <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => onEdit(e)} aria-label={`Edit ${e.full_name}`}><Pencil className="h-4 w-4" /></Button>}
               </div>
               <dl className="mt-3 space-y-1 text-sm">
                 <div className="flex items-center gap-2 text-muted-foreground"><Clock className="h-3.5 w-3.5" /> {dutyText(e)}</div>
@@ -405,7 +412,7 @@ function EmployeeDialog({ employee, onClose }: { employee: Employee | null; onCl
 
 /* --------------------------------------------------------------- profile */
 
-function ProfileDialog({ employee: e, today, onClose, onEdit }: { employee: Employee; today: string; onClose: () => void; onEdit: (e: Employee) => void }) {
+function ProfileDialog({ employee: e, today, isAdmin, onClose, onEdit }: { employee: Employee; today: string; isAdmin: boolean; onClose: () => void; onEdit?: (e: Employee) => void }) {
   const [month, setMonth] = useState(today.slice(0, 7));
   const { data } = useMonthData(month);
   const setAtt = useSetAttendance();
@@ -438,9 +445,9 @@ function ProfileDialog({ employee: e, today, onClose, onEdit }: { employee: Empl
           <div className="flex items-center gap-1">
             <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setMonth(shiftMonth(month, -1))} aria-label="Previous month"><ChevronLeft className="h-4 w-4" /></Button>
             <span className="w-36 text-center text-sm font-medium">{monthLabel(month)}</span>
-            <Button variant="outline" size="icon" className="h-8 w-8" disabled={month >= today.slice(0, 7)} onClick={() => setMonth(shiftMonth(month, 1))} aria-label="Next month"><ChevronRight className="h-4 w-4" /></Button>
+            <Button variant="outline" size="icon" className="h-8 w-8" disabled={!isAdmin && month >= today.slice(0, 7)} onClick={() => setMonth(shiftMonth(month, 1))} aria-label="Next month"><ChevronRight className="h-4 w-4" /></Button>
           </div>
-          <Button variant="ghost" size="sm" onClick={() => onEdit(e)}><Pencil className="h-4 w-4" /> Edit</Button>
+          {onEdit && <Button variant="ghost" size="sm" onClick={() => onEdit(e)}><Pencil className="h-4 w-4" /> Edit</Button>}
         </div>
 
         <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_260px]">
@@ -453,7 +460,8 @@ function ProfileDialog({ employee: e, today, onClose, onEdit }: { employee: Empl
               {days.map((d) => {
                 const a = byDate.get(d);
                 const off = (e.weekly_off ?? []).includes(weekday(d));
-                const future = d > today || d < e.join_date;
+                // Admin: any day from joining (also future, e.g. planned leave). Others: today only.
+                const future = d < e.join_date || (isAdmin ? false : d !== today);
                 const late = a && isLate(a.check_in, e.duty_start);
                 return (
                   <Popover key={d}>
@@ -470,6 +478,16 @@ function ProfileDialog({ employee: e, today, onClose, onEdit }: { employee: Empl
                       <p className="text-sm font-medium">{dateLabel(d)}{off ? " (weekly off)" : ""}</p>
                       <StatusButtons compact value={a?.status ?? null} disabled={setAtt.isPending}
                         onPick={(st) => setAtt.mutate({ employeeId: e.id, date: d, status: a?.status === st ? null : st, checkIn: a?.check_in ?? null })} />
+                      {isAdmin && a && (a.status === "present" || a.status === "half_day") && (
+                        <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                          Came at
+                          <Input type="time" className="h-8 w-32" defaultValue={a.check_in?.slice(0, 5) ?? ""} aria-label="Check-in time"
+                            onBlur={(ev) => {
+                              const v = ev.target.value ? `${ev.target.value}:00` : null;
+                              if (v !== (a.check_in ?? null)) setAtt.mutate({ employeeId: e.id, date: d, status: a.status, checkIn: v });
+                            }} />
+                        </label>
+                      )}
                       <p className="text-[11px] text-muted-foreground">P present · ½ half day · PL paid leave · L leave · A absent. Tap again to clear.</p>
                     </PopoverContent>
                   </Popover>
@@ -533,7 +551,7 @@ function SalaryBreakdown({ s }: { s: SalarySummary }) {
 
 /* ---------------------------------------------------------------- salary */
 
-function SalaryTab({ employees, today, onOpen }: { employees: Employee[]; today: string; onOpen: (e: Employee) => void }) {
+function SalaryTab({ employees, today, onOpen, isAdmin }: { employees: Employee[]; today: string; onOpen: (e: Employee) => void; isAdmin: boolean }) {
   const [month, setMonth] = useState(today.slice(0, 7));
   const [detail, setDetail] = useState<Employee | null>(null);
   const { data } = useMonthData(month);
@@ -634,15 +652,15 @@ function SalaryTab({ employees, today, onOpen }: { employees: Employee[]; today:
       {detail && (() => {
         const r = rows.find((x) => x.e.id === detail.id);
         if (!r) return null;
-        return <SalaryDetailDialog e={r.e} s={r.s} month={month} items={(data?.items ?? []).filter((i) => i.employee_id === r.e.id)} paid={r.paid}
+        return <SalaryDetailDialog e={r.e} s={r.s} month={month} items={(data?.items ?? []).filter((i) => i.employee_id === r.e.id)} paid={r.paid} isAdmin={isAdmin}
           onClose={() => setDetail(null)} onProfile={() => { setDetail(null); onOpen(r.e); }} />;
       })()}
     </div>
   );
 }
 
-function SalaryDetailDialog({ e, s, month, items, paid, onClose, onProfile }: {
-  e: Employee; s: SalarySummary; month: string; items: SalaryItem[]; paid: { id: string; amount: number; paid_on: string } | null;
+function SalaryDetailDialog({ e, s, month, items, paid, isAdmin, onClose, onProfile }: {
+  e: Employee; s: SalarySummary; month: string; items: SalaryItem[]; paid: { id: string; amount: number; paid_on: string } | null; isAdmin: boolean;
   onClose: () => void; onProfile: () => void;
 }) {
   const qc = useQueryClient();
@@ -694,12 +712,13 @@ function SalaryDetailDialog({ e, s, month, items, paid, onClose, onProfile }: {
                   <span className={cn("w-20 text-xs font-medium", i.kind === "bonus" ? "text-emerald-600" : "text-destructive")}>{KIND_LABEL[i.kind]}</span>
                   <span className="min-w-0 flex-1 truncate text-muted-foreground">{i.note}</span>
                   <span className="tabular-nums">{money(i.amount)}</span>
-                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => delItem.mutate(i.id)} aria-label="Delete"><Trash2 className="h-3.5 w-3.5" /></Button>
+                  {isAdmin && <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => delItem.mutate(i.id)} aria-label="Delete"><Trash2 className="h-3.5 w-3.5" /></Button>}
                 </li>
               ))}
             </ul>
           )}
-          <div className="grid grid-cols-[110px_minmax(0,1fr)_minmax(0,1.3fr)_auto] gap-2">
+          {!isAdmin && items.length === 0 && <p className="text-sm text-muted-foreground">None</p>}
+          {isAdmin && <div className="grid grid-cols-[110px_minmax(0,1fr)_minmax(0,1.3fr)_auto] gap-2">
             <Select value={kind} onValueChange={(v) => setKind(v as SalaryItem["kind"])}>
               <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -713,18 +732,19 @@ function SalaryDetailDialog({ e, s, month, items, paid, onClose, onProfile }: {
             <Input className="h-9" placeholder="Note (optional)" value={note} onChange={(x) => setNote(x.target.value)}
               onKeyDown={(x) => { if (x.key === "Enter") addItem.mutate(); }} />
             <Button className="h-9" onClick={() => addItem.mutate()} disabled={addItem.isPending}><Plus className="h-4 w-4" /></Button>
-          </div>
+          </div>}
         </div>
         <DialogFooter className="gap-2 sm:justify-between">
           {paid ? (
             <>
               <span className="flex items-center gap-1.5 text-sm text-emerald-600"><CheckCircle2 className="h-4 w-4" /> Paid {money(paid.amount)} on {paid.paid_on}</span>
-              <Button variant="outline" onClick={() => markPaid.mutate(false)} disabled={markPaid.isPending}>Remove paid mark</Button>
+              {isAdmin && <Button variant="outline" onClick={() => markPaid.mutate(false)} disabled={markPaid.isPending}>Remove paid mark</Button>}
             </>
           ) : (
             <>
-              <span className="text-xs text-muted-foreground">A record only — no money moves in the app.</span>
-              <Button onClick={() => markPaid.mutate(true)} disabled={markPaid.isPending}><CheckCircle2 className="h-4 w-4" /> Mark {money(s.net)} paid</Button>
+              <span className="text-xs text-muted-foreground">{isAdmin ? "A record only — no money moves in the app." : "Only an admin can change salary."}</span>
+              {isAdmin ? <Button onClick={() => markPaid.mutate(true)} disabled={markPaid.isPending}><CheckCircle2 className="h-4 w-4" /> Mark {money(s.net)} paid</Button>
+                : <span className="text-sm text-muted-foreground">Not paid yet</span>}
             </>
           )}
         </DialogFooter>

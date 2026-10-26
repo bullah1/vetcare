@@ -71,6 +71,12 @@ DROP TRIGGER IF EXISTS hr_attendance_updated ON public.hr_attendance;
 CREATE TRIGGER hr_attendance_updated BEFORE UPDATE ON public.hr_attendance
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
+-- Who can do what:
+--   everyone with the HR permission: see everything, mark TODAY's attendance;
+--   admin: everything — change any day (past or future), salary items, paid marks, staff.
+CREATE OR REPLACE FUNCTION public.hr_today() RETURNS date
+LANGUAGE sql STABLE SET search_path = public AS $$ SELECT (now() AT TIME ZONE 'Asia/Dhaka')::date $$;
+
 DO $$
 DECLARE t text;
 BEGIN
@@ -80,8 +86,18 @@ BEGIN
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON public.%I TO authenticated', t);
     EXECUTE format('GRANT ALL ON public.%I TO service_role', t);
     EXECUTE format('DROP POLICY IF EXISTS "hr access" ON public.%I', t);
-    EXECUTE format('CREATE POLICY "hr access" ON public.%I FOR ALL TO authenticated USING (public.has_permission(auth.uid(), ''hr'')) WITH CHECK (public.has_permission(auth.uid(), ''hr''))', t);
+    EXECUTE format('DROP POLICY IF EXISTS "hr read" ON public.%I', t);
+    EXECUTE format('DROP POLICY IF EXISTS "hr admin write" ON public.%I', t);
+    EXECUTE format('CREATE POLICY "hr read" ON public.%I FOR SELECT TO authenticated USING (public.has_permission(auth.uid(), ''hr''))', t);
+    EXECUTE format('CREATE POLICY "hr admin write" ON public.%I FOR ALL TO authenticated USING (public.has_role(auth.uid(), ''admin'')) WITH CHECK (public.has_role(auth.uid(), ''admin''))', t);
   END LOOP;
 END $$;
+
+-- Non-admin HR users may mark today's attendance only.
+DROP POLICY IF EXISTS "hr mark today" ON public.hr_attendance;
+CREATE POLICY "hr mark today" ON public.hr_attendance FOR ALL TO authenticated
+  USING (public.has_permission(auth.uid(), 'hr') AND work_date = public.hr_today())
+  WITH CHECK (public.has_permission(auth.uid(), 'hr') AND work_date = public.hr_today());
+
 
 NOTIFY pgrst, 'reload schema';
