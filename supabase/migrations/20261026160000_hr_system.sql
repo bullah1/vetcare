@@ -1,5 +1,5 @@
 -- Simple HR: staff list, duty time, weekly off day, daily attendance and a
--- monthly salary sheet (deductions for absence / unpaid leave, extra for working
+-- monthly salary sheet (deductions for absence / unpaid leave / unmarked past days, extra for working
 -- on an off day, manual bonus / deduction / advance). Safe to run more than once.
 -- Access: admins, and users given the "HR & Salary" permission (key: hr).
 
@@ -19,6 +19,9 @@ CREATE TABLE IF NOT EXISTS public.hr_employees (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- Unmarked days before this date are not counted as absent (attendance started being kept).
+ALTER TABLE public.hr_employees ADD COLUMN IF NOT EXISTS attendance_from date NOT NULL DEFAULT CURRENT_DATE;
 
 CREATE TABLE IF NOT EXISTS public.hr_attendance (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

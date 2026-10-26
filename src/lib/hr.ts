@@ -7,7 +7,8 @@
 //   − 1 day pay   for each working day before the joining date
 //   + 1 day pay   for each day worked on a weekly off day
 //   + bonus − deduction − advance
-// Paid leave costs nothing. Days not marked are NOT deducted (they are only counted, as a reminder).
+// Paid leave costs nothing. A past working day with no mark counts as Absent (one day cut);
+// today is not counted until the day is over, nor are days before `attendance_from`.
 
 export type AttendanceStatus = "present" | "half_day" | "leave" | "paid_leave" | "absent";
 
@@ -27,6 +28,8 @@ export type Employee = {
   id: string; full_name: string; phone: string | null; designation: string | null;
   monthly_salary: number; duty_start: string | null; duty_end: string | null;
   weekly_off: number[]; join_date: string; is_active: boolean; notes: string | null;
+  /** Unmarked days before this date are not counted as absent. */
+  attendance_from?: string | null;
 };
 export type AttendanceRow = { id?: string; employee_id: string; work_date: string; status: AttendanceStatus; check_in: string | null; note?: string | null };
 export type SalaryItem = { id: string; employee_id: string; month: string; kind: "bonus" | "deduction" | "advance"; amount: number; note: string | null };
@@ -72,9 +75,9 @@ export type SalarySummary = {
 
 /**
  * Salary sheet for one employee and one month ("YYYY-MM").
- * `today` ("YYYY-MM-DD") limits the "not marked" reminder to days already passed.
+ * `today` ("YYYY-MM-DD"): working days before today with no mark count as absent; today and later are not cut.
  */
-export function monthSalary(emp: Pick<Employee, "monthly_salary" | "weekly_off" | "join_date" | "duty_start">, month: string,
+export function monthSalary(emp: Pick<Employee, "monthly_salary" | "weekly_off" | "join_date" | "duty_start" | "attendance_from">, month: string,
   attendance: Pick<AttendanceRow, "work_date" | "status" | "check_in">[], items: Pick<SalaryItem, "kind" | "amount">[], today: string): SalarySummary {
   const salary = Number(emp.monthly_salary) || 0;
   const off = new Set((emp.weekly_off ?? []).map(Number));
@@ -88,7 +91,7 @@ export function monthSalary(emp: Pick<Employee, "monthly_salary" | "weekly_off" 
     const isOff = off.has(weekday(d));
     const a = byDate.get(d);
     if (d < emp.join_date) { if (!isOff) s.notJoinedDays++; continue; }
-    if (!a) { if (!isOff && d <= today) s.notMarked++; continue; }
+    if (!a) { if (!isOff && d < today && d >= (emp.attendance_from ?? "")) s.notMarked++; continue; }
     if (a.status === "present" || a.status === "half_day") {
       if (isLate(a.check_in, emp.duty_start)) s.late++;
       if (isOff) { s.offDayWorked += a.status === "present" ? 1 : 0.5; continue; }
@@ -103,7 +106,8 @@ export function monthSalary(emp: Pick<Employee, "monthly_salary" | "weekly_off" 
 
   const sum = (k: string) => round2(items.filter((i) => i.kind === k).reduce((t, i) => t + Number(i.amount || 0), 0));
   const bonus = sum("bonus"), manualDeduction = sum("deduction"), advance = sum("advance");
-  const deductDays = s.absent + s.leave + s.halfDays * 0.5 + s.notJoinedDays;
+  // Not marked on a past working day = did not come = absent.
+  const deductDays = s.absent + s.notMarked + s.leave + s.halfDays * 0.5 + s.notJoinedDays;
   const deduction = round2(Math.min(salary, deductDays * perDay));
   const offDayExtra = round2(s.offDayWorked * perDay);
   const net = round2(Math.max(0, salary - deduction + offDayExtra + bonus - manualDeduction - advance));

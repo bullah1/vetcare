@@ -18,11 +18,28 @@ describe("calendar helpers", () => {
 });
 
 describe("monthly salary", () => {
-  it("full month with nothing marked = full salary, unmarked days counted", () => {
+  it("past working days not marked count as absent; today and future are not cut", () => {
     const s = monthSalary(emp, "2026-10", [], [], "2026-10-31");
     assert.equal(s.workingDays, 26);
     assert.equal(s.perDay, 1000);
-    assert.equal(s.notMarked, 26);
+    assert.equal(s.notMarked, 25); // Oct 1–30 working days; the 31st is "today"
+    assert.equal(s.net, 1000);
+    const mid = monthSalary(emp, "2026-10", [], [], "2026-10-06"); // Oct 1, 3, 4, 5 passed (2nd is Friday)
+    assert.equal(mid.notMarked, 4);
+    assert.equal(mid.net, 22000);
+  });
+
+  it("days before attendance started are not cut", () => {
+    const s = monthSalary({ ...emp, attendance_from: "2026-10-26" }, "2026-10", [], [], "2026-10-28");
+    assert.equal(s.notMarked, 2); // only Oct 26 and 27
+    assert.equal(s.net, 24000);
+  });
+
+  it("everyone marked = full salary", () => {
+    const all = ["01","03","04","05","06","07","08","10","11","12","13","14","15","17","18","19","20","21","22","24","25","26","27","28","29","31"]
+      .map((d) => att(`2026-10-${d}`, "present"));
+    const s = monthSalary(emp, "2026-10", all, [], "2026-11-05");
+    assert.equal(s.notMarked, 0);
     assert.equal(s.net, 26000);
   });
 
@@ -35,7 +52,7 @@ describe("monthly salary", () => {
       att("2026-10-07", "paid_leave", null),
       att("2026-10-09", "present"), // Friday = off day → extra
       att("2026-10-12", "present", "09:30:00"), // late
-    ], [], "2026-10-31");
+    ], [], "2026-10-01");
     assert.equal(s.absent, 1);
     assert.equal(s.leave, 2);
     assert.equal(s.halfDays, 1);
@@ -51,14 +68,14 @@ describe("monthly salary", () => {
   it("bonus, deduction and advance; leave on an off day costs nothing", () => {
     const s = monthSalary(emp, "2026-10", [att("2026-10-16", "leave", null)], [
       { kind: "bonus", amount: 2000 }, { kind: "advance", amount: 5000 }, { kind: "deduction", amount: 300 },
-    ], "2026-10-31");
+    ], "2026-10-01");
     assert.equal(s.leave, 0);
     assert.equal(s.net, 26000 + 2000 - 5000 - 300);
   });
 
   it("joined mid-month: days before joining are not paid", () => {
     // Joined Oct 15: working days Oct 1–14 = 14 − 2 Fridays (2, 9) = 12
-    const s = monthSalary({ ...emp, join_date: "2026-10-15" }, "2026-10", [], [], "2026-10-31");
+    const s = monthSalary({ ...emp, join_date: "2026-10-15" }, "2026-10", [], [], "2026-10-15");
     assert.equal(s.notJoinedDays, 12);
     assert.equal(s.net, 14000);
   });

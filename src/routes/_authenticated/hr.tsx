@@ -234,7 +234,7 @@ function AttendanceTab({ employees, today, onOpen }: { employees: Employee[]; to
           );
         })}
       </div>
-      <p className="text-xs text-muted-foreground">Tap a status to mark it, tap it again to clear. Present on today records the check-in time; checking in more than 10 minutes after duty start shows as Late (no salary cut).</p>
+      <p className="text-xs text-muted-foreground">A working day left unmarked counts as absent (one day's pay cut) once the day is over. Tap a status to mark it, tap it again to clear. Present on today records the check-in time; checking in more than 10 minutes after duty start shows as Late (no salary cut).</p>
     </div>
   );
 }
@@ -317,6 +317,7 @@ function EmployeeDialog({ employee, onClose }: { employee: Employee | null; onCl
     duty_end: employee?.duty_end?.slice(0, 5) ?? "21:00",
     weekly_off: employee?.weekly_off ?? [5],
     join_date: employee?.join_date ?? todayDhaka(),
+    attendance_from: employee?.attendance_from ?? todayDhaka(),
     is_active: employee?.is_active ?? true,
     notes: employee?.notes ?? "",
   });
@@ -329,7 +330,7 @@ function EmployeeDialog({ employee, onClose }: { employee: Employee | null; onCl
       const payload = {
         full_name: name, phone: f.phone.trim() || null, designation: f.designation.trim() || null,
         monthly_salary: salary, duty_start: f.duty_start || null, duty_end: f.duty_end || null,
-        weekly_off: f.weekly_off, join_date: f.join_date || todayDhaka(), is_active: f.is_active, notes: f.notes.trim() || null,
+        weekly_off: f.weekly_off, join_date: f.join_date || todayDhaka(), attendance_from: f.attendance_from || todayDhaka(), is_active: f.is_active, notes: f.notes.trim() || null,
       };
       const { error } = employee
         ? await db.from("hr_employees").update(payload).eq("id", employee.id)
@@ -359,6 +360,11 @@ function EmployeeDialog({ employee, onClose }: { employee: Employee | null; onCl
           <div className="space-y-1.5"><Label htmlFor="hr-f-phone">Phone</Label><Input id="hr-f-phone" value={f.phone} inputMode="tel" onChange={(e) => setF({ ...f, phone: e.target.value })} placeholder="01XXXXXXXXX" /></div>
           <div className="space-y-1.5"><Label htmlFor="hr-f-monthly-salary">Monthly salary ৳</Label><Input id="hr-f-monthly-salary" value={f.monthly_salary} inputMode="decimal" onChange={(e) => setF({ ...f, monthly_salary: e.target.value })} placeholder="0" /></div>
           <div className="space-y-1.5"><Label htmlFor="hr-f-joining-date">Joining date</Label><Input id="hr-f-joining-date" type="date" value={f.join_date} onChange={(e) => setF({ ...f, join_date: e.target.value })} /></div>
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label htmlFor="hr-f-att-from">Attendance counted from</Label>
+            <Input id="hr-f-att-from" type="date" value={f.attendance_from} onChange={(e) => setF({ ...f, attendance_from: e.target.value })} />
+            <p className="text-[11px] text-muted-foreground">From this date, a working day left unmarked counts as absent (one day&apos;s pay cut). Earlier unmarked days are not cut.</p>
+          </div>
           <div className="space-y-1.5"><Label htmlFor="hr-f-duty-starts">Duty starts</Label><Input id="hr-f-duty-starts" type="time" value={f.duty_start} onChange={(e) => setF({ ...f, duty_start: e.target.value })} /></div>
           <div className="space-y-1.5"><Label htmlFor="hr-f-duty-ends">Duty ends</Label><Input id="hr-f-duty-ends" type="time" value={f.duty_end} onChange={(e) => setF({ ...f, duty_end: e.target.value })} /></div>
           <div className="space-y-1.5 sm:col-span-2">
@@ -452,7 +458,7 @@ function ProfileDialog({ employee: e, today, onClose, onEdit }: { employee: Empl
                 return (
                   <Popover key={d}>
                     <PopoverTrigger asChild disabled={future}>
-                      <button type="button" disabled={future} title={a ? STATUS_META[a.status].label : off ? "Weekly off" : "Not marked"}
+                      <button type="button" disabled={future} title={a ? STATUS_META[a.status].label : off ? "Weekly off" : d < today && d >= (e.attendance_from ?? "") ? "Not marked — counted as absent" : "Not marked"}
                         className={cn("relative flex aspect-square flex-col items-center justify-center rounded-md border text-xs disabled:opacity-40",
                           a ? cn(STATUS_META[a.status].tone, "border-transparent") : off ? "bg-muted text-muted-foreground" : "bg-background hover:bg-muted")}>
                         <span className="font-semibold tabular-nums">{Number(d.slice(8))}</span>
@@ -511,6 +517,7 @@ function SalaryBreakdown({ s }: { s: SalarySummary }) {
       {row("Present", `${s.present}${s.halfDays ? ` + ${s.halfDays} half` : ""}`)}
       {s.paidLeave > 0 && row("Paid leave", String(s.paidLeave))}
       {(s.leave > 0 || s.absent > 0) && row("Leave / absent", `${s.leave} / ${s.absent}`)}
+      {s.notMarked > 0 && row("Not marked (absent)", String(s.notMarked), "text-destructive")}
       {s.late > 0 && row("Late (no cut)", String(s.late))}
       {s.notJoinedDays > 0 && row("Before joining", `${s.notJoinedDays} days`)}
       {s.deduction > 0 && row(`Cut for ${num(s.deductDays)} day${s.deductDays === 1 ? "" : "s"}`, `− ${money(s.deduction)}`, "text-destructive")}
@@ -519,7 +526,7 @@ function SalaryBreakdown({ s }: { s: SalarySummary }) {
       {s.manualDeduction > 0 && row("Other deduction", `− ${money(s.manualDeduction)}`, "text-destructive")}
       {s.advance > 0 && row("Advance taken", `− ${money(s.advance)}`, "text-destructive")}
       <div className="flex justify-between gap-2 border-t pt-1.5 font-semibold"><span>Net salary</span><span className="tabular-nums">{money(s.net)}</span></div>
-      {s.notMarked > 0 && <p className="pt-1 text-[11px] text-amber-700 dark:text-amber-300">{s.notMarked} working day{s.notMarked === 1 ? "" : "s"} not marked yet (not cut).</p>}
+      {s.notMarked > 0 && <p className="pt-1 text-[11px] text-amber-700 dark:text-amber-300">{s.notMarked} past working day{s.notMarked === 1 ? "" : "s"} not marked — counted as absent. Mark them if the person came.</p>}
     </div>
   );
 }
@@ -595,11 +602,11 @@ function SalaryTab({ employees, today, onOpen }: { employees: Employee[]; today:
               <tr key={e.id} className="cursor-pointer hover:bg-muted/40" onClick={() => setDetail(e)}>
                 <td className="px-3 py-2">
                   <span className="block font-medium">{e.full_name}</span>
-                  <span className="block text-xs text-muted-foreground">{e.designation || "Staff"}{s.notMarked ? `   ${s.notMarked} not marked` : ""}</span>
+                  <span className="block text-xs text-muted-foreground">{e.designation || "Staff"}{s.notMarked ? `   ${s.notMarked} not marked = absent` : ""}</span>
                 </td>
                 <td className="px-2 py-2 text-right tabular-nums">{money(s.salary)}</td>
                 <td className="px-2 py-2 text-right tabular-nums">{s.present}{s.halfDays ? ` +${s.halfDays}½` : ""}</td>
-                <td className="px-2 py-2 text-right tabular-nums">{s.leave + s.paidLeave} / {s.absent}</td>
+                <td className="px-2 py-2 text-right tabular-nums">{s.leave + s.paidLeave} / {s.absent + s.notMarked}</td>
                 <td className="px-2 py-2 text-right tabular-nums text-destructive">{s.deduction ? `− ${money(s.deduction)}` : "—"}</td>
                 <td className="px-2 py-2 text-right tabular-nums text-emerald-600">{s.offDayExtra + s.bonus ? `+ ${money(s.offDayExtra + s.bonus)}` : "—"}</td>
                 <td className="px-2 py-2 text-right tabular-nums text-destructive">{s.advance + s.manualDeduction ? `− ${money(s.advance + s.manualDeduction)}` : "—"}</td>
@@ -621,7 +628,7 @@ function SalaryTab({ employees, today, onOpen }: { employees: Employee[]; today:
         </table>
       </div>
       <p className="text-xs text-muted-foreground">
-        Per-day pay = salary ÷ working days (days that are not a weekly off). Absent and unpaid leave cut one day, half day cuts half; paid leave cuts nothing; working on an off day adds one day. Days not marked are not cut. Click a row to add a bonus, deduction or advance, or to mark the salary paid.
+        Per-day pay = salary ÷ working days (days that are not a weekly off). Absent and unpaid leave cut one day, half day cuts half; paid leave cuts nothing; working on an off day adds one day. A past working day that is not marked counts as absent (one day cut); today is not cut until it is over. Click a row to add a bonus, deduction or advance, or to mark the salary paid.
       </p>
 
       {detail && (() => {
