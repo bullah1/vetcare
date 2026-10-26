@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { memo, useCallback, useDeferredValue, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ShoppingCart, Search, Plus, Minus, Trash2, Receipt as ReceiptIcon, CheckCircle2, AlertTriangle, Clock, UserPlus, Check, ChevronsUpDown, PauseCircle, ClipboardList, X, Bike, Printer } from "lucide-react";
+import { ShoppingCart, Search, Plus, Minus, Trash2, Receipt as ReceiptIcon, CheckCircle2, AlertTriangle, Clock, UserPlus, Check, ChevronsUpDown, PauseCircle, ClipboardList, X, Bike, Printer, LayoutGrid, List } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 
 import { supabase } from "@/integrations/supabase/client";
@@ -56,6 +56,7 @@ function CustomerCombobox({
   onChange,
   openSignal = 0,
   onPicked,
+  onQuickAdd,
 }: {
   owners: { id: string; full_name: string; phone?: string | null; visitCount?: number }[];
   value: string;
@@ -64,11 +65,32 @@ function CustomerCombobox({
   openSignal?: number;
   /** Called after a customer is chosen, so the next step can take focus. */
   onPicked?: () => void;
+  /** Saves the typed name / phone as a new customer; resolves to its id. */
+  onQuickAdd?: (name: string, phone: string | null) => Promise<string | null>;
 }) {
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [adding, setAdding] = useState(false);
   useEffect(() => {
     if (openSignal > 0) setOpen(true);
   }, [openSignal]);
+  useEffect(() => { if (!open) setSearch(""); }, [open]);
+  const parsed = parseCustomerText(search);
+  const digits = (v?: string | null) => (v ?? "").replace(/\D/g, "").replace(/^88/, "");
+  // Offer "Add" unless this exact name or phone is already a customer.
+  const exists = !!parsed && owners.some((o) =>
+    (parsed.phone && digits(o.phone) === digits(parsed.phone)) ||
+    (!parsed.phone && o.full_name.trim().toLowerCase() === parsed.name.toLowerCase()));
+  const quickAdd = async () => {
+    if (!parsed || !onQuickAdd || adding) return;
+    setAdding(true);
+    try {
+      const id = await onQuickAdd(parsed.name, parsed.phone);
+      if (id) pick(id);
+    } finally {
+      setAdding(false);
+    }
+  };
   const picked = useRef(false);
   const pick = (id: string) => {
     onChange(id);
@@ -101,9 +123,9 @@ function CustomerCombobox({
         }}
       >
         <Command>
-          <CommandInput placeholder="Name or phone, then Enter…" />
+          <CommandInput placeholder="Name or phone, then Enter…" value={search} onValueChange={setSearch} />
           <CommandList>
-            <CommandEmpty>No customer found.</CommandEmpty>
+            {!(parsed && onQuickAdd && !exists) && <CommandEmpty>No customer found.</CommandEmpty>}
             <CommandGroup>
               <CommandItem value="walk-in" onSelect={() => pick("")}>
                 <Check className={`h-4 w-4 ${value ? "opacity-0" : "opacity-100"}`} />
@@ -128,11 +150,35 @@ function CustomerCombobox({
                 </CommandItem>
               ))}
             </CommandGroup>
+            {parsed && onQuickAdd && !exists && (
+              <CommandGroup forceMount>
+                <CommandItem forceMount value={`__add__ ${search}`} onSelect={quickAdd} disabled={adding} className="text-primary data-[selected=true]:text-primary">
+                  <UserPlus className="h-4 w-4" />
+                  <span className="min-w-0 flex-1 truncate">
+                    {adding ? "Adding…" : <>Add <b>{parsed.name}</b>{parsed.phone && parsed.phone !== parsed.name ? <span className="text-muted-foreground"> · {parsed.phone}</span> : null}</>}
+                  </span>
+                  <span className="rounded bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground">New</span>
+                </CommandItem>
+              </CommandGroup>
+            )}
           </CommandList>
         </Command>
       </PopoverContent>
     </Popover>
   );
+}
+
+/** "Karim 01712345678" → name Karim, phone 01712345678. Only a phone → the phone is used as the name too. */
+function parseCustomerText(text: string): { name: string; phone: string | null } | null {
+  const t = text.trim();
+  if (!t) return null;
+  const m = t.replace(/[\s-]/g, "").match(/(?:\+?88)?01\d{9}/);
+  // Only digits but not a full mobile number: still searching, don't offer Add.
+  if (!m) return /^[\d\s+-]+$/.test(t) ? null : { name: t, phone: null };
+  const phone = m[0].replace(/^\+?88/, "");
+  // Remove the phone digits (with any spaces / dashes inside) from the text to get the name.
+  const name = t.replace(/(?:\+?8\s*8\s*)?0[\s-]*1(?:[\s-]*\d){9}/, "").replace(/\s+/g, " ").trim();
+  return { name: name || phone, phone };
 }
 
 const PosThumb = memo(function PosThumb({ path, name }: { path: string | null; name: string }) {
@@ -235,6 +281,38 @@ const ProductCard = memo(function ProductCard({ p, ranges, onAdd, active = false
           {out ? "Out of stock" : `${qty}${p.unit ? ` ${p.unit}` : ""}`}
         </span>
       </div>
+    </button>
+  );
+});
+
+/** Same product as a compact list row (list view). */
+const ProductRow = memo(function ProductRow({ p, ranges, onAdd, active = false }: { p: Product; ranges?: MatchRange[]; onAdd: (p: Product) => void; active?: boolean }) {
+  const qty = Number(p.stock_quantity);
+  const out = qty <= 0;
+  const threshold = Number(p.low_stock_threshold ?? 0);
+  const low = !out && threshold > 0 && qty <= threshold;
+  const stockTone = out ? "text-destructive" : low ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400";
+  const dot = out ? "bg-destructive" : low ? "bg-amber-500" : "bg-emerald-500";
+  return (
+    <button
+      type="button"
+      onClick={() => onAdd(p)}
+      data-active={active || undefined}
+      className={`flex w-full min-w-0 touch-manipulation items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-primary/[0.04] focus-visible:bg-primary/5 focus-visible:outline-none data-[active]:bg-primary/[0.07] data-[active]:shadow-[inset_3px_0_0_var(--primary)] ${out ? "opacity-70" : ""}`}
+    >
+      <PosThumb path={p.image_url} name={p.name} />
+      <span className="min-w-0 flex-1">
+        <HighlightText className="block truncate text-[13px] font-medium text-foreground" text={p.name} ranges={ranges} />
+        <span className="block truncate text-[11px] text-muted-foreground">{[p.category, p.sku && `SKU ${p.sku}`].filter(Boolean).join("   ")}</span>
+      </span>
+      <span className={`hidden w-28 shrink-0 items-center justify-end gap-1 text-[11px] font-medium tabular-nums sm:flex ${stockTone}`}>
+        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
+        {out ? "Out of stock" : `${qty}${p.unit ? ` ${p.unit}` : ""}`}
+      </span>
+      <span className="w-20 shrink-0 text-right">
+        <span className="block text-[14px] font-semibold tabular-nums">৳{Number(p.selling_price).toLocaleString("en-BD", { maximumFractionDigits: 2 })}</span>
+        <span className={`block text-[11px] tabular-nums sm:hidden ${stockTone}`}>{out ? "Out" : `${qty}${p.unit ? ` ${p.unit}` : ""}`}</span>
+      </span>
     </button>
   );
 });
@@ -1210,6 +1288,39 @@ function POSPage() {
 
 
 
+  // Customer typed in the search but not on the list → "Add" saves it in one click.
+  const quickAddCustomer = async (name: string, phone: string | null): Promise<string | null> => {
+    try {
+      if (phone) {
+        const dup = owners.find((o) => (o.phone ?? "").replace(/\D/g, "").replace(/^88/, "") === phone);
+        if (dup) return dup.id;
+      }
+      const { data, error } = await supabase.from("pet_owners")
+        .insert({ full_name: name, phone })
+        .select("id,full_name,phone").single();
+      if (error) throw error;
+      const o = data as Owner;
+      // Show the new customer at once, before the list reloads.
+      qc.setQueryData<Owner[]>(["owners"], (old) => (old ? [...old, o] : [o]));
+      qc.invalidateQueries({ queryKey: ["owners"] });
+      qc.invalidateQueries({ queryKey: ["pet_owners"] });
+      toast.success(`Customer "${o.full_name}" added`);
+      return o.id;
+    } catch (e: any) {
+      toast.error(e?.message ?? "Could not add the customer");
+      return null;
+    }
+  };
+
+  // Product grid or list — remembered on this device.
+  const [view, setViewState] = useState<"grid" | "list">(() => {
+    try { return localStorage.getItem("pos.view") === "list" ? "list" : "grid"; } catch { return "grid"; }
+  });
+  const setView = (v: "grid" | "list") => {
+    setViewState(v);
+    try { localStorage.setItem("pos.view", v); } catch { /* ignore */ }
+  };
+
   // Which print the Enter key triggers on the "Sale complete" screen.
   const [enterPrint, setEnterPrintState] = useState<"thermal" | "a4">(() => {
     try { return localStorage.getItem("pos.enterPrint") === "a4" ? "a4" : "thermal"; } catch { return "thermal"; }
@@ -1253,6 +1364,7 @@ function POSPage() {
           onChange={setOwnerId}
           openSignal={isDesk ? customerSignal : 0}
           onPicked={isDesk ? () => { paidRef.current?.focus(); paidRef.current?.select(); } : undefined}
+          onQuickAdd={quickAddCustomer}
         />
         <Button type="button" variant="outline" size="icon" onClick={() => setNewCustOpen(true)} title="Add new customer">
           <UserPlus className="h-4 w-4" />
@@ -1629,19 +1741,43 @@ function POSPage() {
               </p>
             )}
           </div>
-          {!q.trim() && filtered.length > 0 && (
-            <p className="px-1 text-xs font-medium text-muted-foreground">Best sellers</p>
-          )}
-          <div data-pos-grid className="grid min-w-0 auto-rows-fr grid-cols-2 gap-2.5 md:grid-cols-3 2xl:grid-cols-4">
-            {filtered.map(({ p, ranges }, i) => (
-              <ProductCard key={p.id} p={p} ranges={ranges} onAdd={addToCart} active={i === hi} />
-            ))}
-            {filtered.length === 0 && (
-              <div className="col-span-full rounded-xl border border-dashed py-10 text-center text-sm text-muted-foreground">
-                No product matches “{q.trim()}”. Check the spelling or scan the barcode.
-              </div>
-            )}
+          <div className="flex items-center justify-between gap-2 px-1">
+            <p className="text-xs font-medium text-muted-foreground">
+              {q.trim() ? `${filtered.length} match${filtered.length === 1 ? "" : "es"}` : filtered.length > 0 ? "Best sellers" : ""}
+            </p>
+            <div className="inline-flex rounded-lg border bg-card p-0.5" role="group" aria-label="Product view">
+              {(["grid", "list"] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  aria-pressed={view === v}
+                  title={v === "grid" ? "Grid view" : "List view"}
+                  onClick={() => setView(v)}
+                  className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${view === v ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                  {v === "grid" ? <LayoutGrid className="h-3.5 w-3.5" /> : <List className="h-3.5 w-3.5" />}
+                  {v === "grid" ? "Grid" : "List"}
+                </button>
+              ))}
+            </div>
           </div>
+          {filtered.length === 0 ? (
+            <div className="rounded-xl border border-dashed py-10 text-center text-sm text-muted-foreground">
+              No product matches “{q.trim()}”. Check the spelling or scan the barcode.
+            </div>
+          ) : view === "list" ? (
+            <div data-pos-grid className="min-w-0 divide-y overflow-hidden rounded-xl border bg-card">
+              {filtered.map(({ p, ranges }, i) => (
+                <ProductRow key={p.id} p={p} ranges={ranges} onAdd={addToCart} active={i === hi} />
+              ))}
+            </div>
+          ) : (
+            <div data-pos-grid className="grid min-w-0 auto-rows-fr grid-cols-2 gap-2.5 md:grid-cols-3 2xl:grid-cols-4">
+              {filtered.map(({ p, ranges }, i) => (
+                <ProductCard key={p.id} p={p} ranges={ranges} onAdd={addToCart} active={i === hi} />
+              ))}
+            </div>
+          )}
 
         </div>
 

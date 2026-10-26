@@ -3,7 +3,8 @@
 // Flow: search → Enter picks the product → Qty → Enter → Total (or Tab to Unit
 // price) → Enter adds the line → focus returns to search. Ctrl+Enter saves.
 // Saving still goes through the existing create_purchase_invoice RPC, which does
-// stock, batches, supplier balance and payment in one database transaction.
+// stock and batches in one database transaction. Purchases are stock only:
+// no payment or supplier due is recorded (accounts are kept separately).
 import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { useMutation } from "@tanstack/react-query";
@@ -71,8 +72,6 @@ export function PurchaseEntryDialog({
   const [vatValue, setVatValue] = useState("");
   const [vatKind, setVatKind] = useState<AmountKind>("amt");
   const [charges, setCharges] = useState("");
-  const [paid, setPaid] = useState("");
-  const [method, setMethod] = useState("cash");
 
   // Entry bar
   const [entryProduct, setEntryProduct] = useState<EntryProduct | null>(null);
@@ -85,14 +84,11 @@ export function PurchaseEntryDialog({
   const saving = useRef(false);
 
   const productById = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
-  const supplier = suppliers.find((s) => s.id === supplierId);
 
   const totals = useMemo(
     () => invoiceTotals(rows, { overall_disc_value: discValue, overall_disc_kind: discKind, vat_value: vatValue, vat_kind: vatKind, charges }),
     [rows, discValue, discKind, vatValue, vatKind, charges],
   );
-  const paidNum = method === "due" ? 0 : num(paid) ?? 0;
-  const due = Math.max(totals.net - paidNum, 0);
   const dirty = rows.length > 0 || !!entryProduct;
 
   // ---------- entry bar ----------
@@ -196,10 +192,9 @@ export function PurchaseEntryDialog({
         updateRow(bad.key, (r) => ({ ...r, open: true }));
         throw new Error(`${productById.get(bad.product_id)?.name ?? "A line"}: ${lineError(bad)}`);
       }
-      if ([discValue, vatValue, charges, paid].some((v) => v.trim() !== "" && num(v) === null)) {
-        throw new Error("Discount, VAT, charges and paid must be numbers of 0 or more");
+      if ([discValue, vatValue, charges].some((v) => v.trim() !== "" && num(v) === null)) {
+        throw new Error("Discount, VAT and charges must be numbers of 0 or more");
       }
-      if (paidNum > totals.net + 0.009) throw new Error(`Paid cannot be more than the net payable (${money(totals.net)})`);
 
       const { data, error } = await supabase.rpc("create_purchase_invoice" as any, {
         _supplier_id: supplierId || null,
@@ -217,11 +212,18 @@ export function PurchaseEntryDialog({
         _discount: totals.overallDiscount,
         _vat: totals.vat,
         _freight: totals.charges,
-        _paid: paidNum,
-        _payment_method: (method === "due" ? "cash" : method) as any,
+        _paid: 0,
+        _payment_method: "cash" as any,
         _notes: notes.trim() || null,
+        // Goods into stock only: no payment, cash or supplier due (accounts are kept separately).
+        _stock_only: true,
       });
-      if (error) throw error;
+      if (error) {
+        if (/create_purchase_invoice|_stock_only|PGRST202|schema cache/i.test(`${error.message} ${(error as any).code ?? ""}`)) {
+          throw new Error("Run the new purchase SQL (stock only) in Supabase first, then save again. Nothing was saved.");
+        }
+        throw error;
+      }
       return data as any;
     },
     onSuccess: (data) => {
@@ -274,13 +276,6 @@ export function PurchaseEntryDialog({
                   {suppliers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
                 </SelectContent>
               </Select>
-              {supplier && Number(supplier.balance_due) !== 0 && (
-                <p className={cn("mt-1 text-xs", Number(supplier.balance_due) > 0 ? "text-destructive" : "text-emerald-600")}>
-                  {Number(supplier.balance_due) > 0
-                    ? `We owe ${money(Number(supplier.balance_due))} already`
-                    : `Advance ${money(Math.abs(Number(supplier.balance_due)))} will be used on this purchase`}
-                </p>
-              )}
             </div>
             <Input className="h-9" value={supplierInvoiceNo} onChange={(e) => setSupplierInvoiceNo(e.target.value)} placeholder="Supplier invoice no." aria-label="Supplier invoice number" />
             <Input className="h-9" type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} aria-label="Invoice date" />
@@ -386,29 +381,12 @@ export function PurchaseEntryDialog({
             <AmountLine label="VAT / tax" value={vatValue} kind={vatKind} onValue={setVatValue} onKind={setVatKind} result={money(totals.vat)} />
             <AmountLine label="Additional charges" value={charges} onValue={setCharges} result={money(totals.charges)} />
             <div className="flex items-baseline justify-between border-t pt-2">
-              <span className="font-semibold">Net payable</span>
+              <span className="font-semibold">Purchase total</span>
               <span className="text-2xl font-bold tabular-nums">{money(totals.net)}</span>
             </div>
-            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,130px)_minmax(0,110px)] items-center gap-2 pt-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,130px)_minmax(0,140px)]">
-              <Label className="truncate text-sm font-normal text-muted-foreground">Paid now</Label>
-              <div className="relative">
-                <Input className="h-8 pr-11 text-right tabular-nums" inputMode="decimal" value={method === "due" ? "" : paid}
-                  disabled={method === "due"} onChange={(e) => setPaid(e.target.value)} placeholder="0" aria-label="Paid now" />
-                <button type="button" disabled={method === "due"} onClick={() => setPaid(fmtField(totals.net, 2))}
-                  className="absolute right-1 top-1/2 -translate-y-1/2 rounded px-1.5 text-[11px] font-medium text-primary hover:bg-primary/10 disabled:opacity-40">Full</button>
-              </div>
-              <Select value={method} onValueChange={setMethod}>
-                <SelectTrigger className="h-8" aria-label="Payment method"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="cash">Cash</SelectItem>
-                  <SelectItem value="card">Card</SelectItem>
-                  <SelectItem value="mobile_banking">Mobile banking</SelectItem>
-                  <SelectItem value="bank_transfer">Bank transfer</SelectItem>
-                  <SelectItem value="due">Pay later (due)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <TotalLine label="Due" value={money(due)} danger={due > 0} />
+            <p className="rounded-md bg-muted/60 px-2.5 py-1.5 text-xs text-muted-foreground">
+              Stock only: products go into stock. No payment, cash or supplier due is recorded — accounts are kept separately.
+            </p>
             <div className="flex gap-2 pt-1">
               <Button type="button" variant="outline" className="flex-1" onClick={() => requestClose(false)} disabled={create.isPending}>Cancel</Button>
               <Button type="button" className="flex-[2]" onClick={save} disabled={create.isPending || rows.length === 0}>

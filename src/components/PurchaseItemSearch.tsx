@@ -77,6 +77,7 @@ export const PurchaseItemSearch = forwardRef<HTMLInputElement, Props>(function P
           if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setActive((i) => Math.min(i + 1, results.length - 1)); }
           else if (e.key === "ArrowUp") { e.preventDefault(); setActive((i) => Math.max(i - 1, 0)); }
           else if (e.key === "Enter") {
+            if (e.ctrlKey || e.metaKey) return; // Ctrl+Enter = save the purchase (handled by the window)
             e.preventDefault();
             e.stopPropagation();
             if (results[active]) pick(results[active].p);

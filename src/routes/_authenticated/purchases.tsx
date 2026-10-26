@@ -124,7 +124,7 @@ type Supplier = { id: string; name: string; phone: string | null; balance_due: n
 type Invoice = {
   id: string; invoice_no: string; supplier_invoice_no: string | null; supplier_id: string | null;
   invoice_date: string; subtotal: number; discount: number; vat: number; freight: number;
-  total: number; paid: number; due: number; status: string; credit_applied?: number | null; notes: string | null; created_at: string;
+  total: number; paid: number; due: number; status: string; credit_applied?: number | null; stock_only?: boolean | null; notes: string | null; created_at: string;
   suppliers?: { name: string } | null;
 };
 
@@ -379,6 +379,7 @@ function PurchasesPage() {
       {returnFor && (
         <ReturnDialog
           invoiceId={returnFor}
+          stockOnly={!!invoices.find((i) => i.id === returnFor)?.stock_only}
           onClose={() => setReturnFor(null)}
           onDone={() => {
             qc.invalidateQueries({ queryKey: ["purchase_invoices"] });
@@ -408,6 +409,7 @@ function StatusBadge({ status }: { status: string }) {
     partially_returned: { label: "Part. Returned", cls: "bg-orange-100 text-orange-800" },
     returned: { label: "Returned", cls: "bg-rose-100 text-rose-800" },
     draft: { label: "Draft", cls: "bg-slate-100 text-slate-800" },
+    stock: { label: "Stock in", cls: "bg-sky-100 text-sky-800" },
   };
   const s = map[status] ?? { label: status, cls: "bg-slate-100 text-slate-800" };
   return <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${s.cls}`}>{s.label}</span>;
@@ -583,11 +585,15 @@ function ViewInvoiceDialog({ invoiceId, onClose }: { invoiceId: string; onClose:
                 <div className="flex justify-between"><span>VAT</span><span>{fmt(Number(inv.vat))}</span></div>
                 <div className="flex justify-between"><span>Freight</span><span>{fmt(Number(inv.freight))}</span></div>
                 <div className="flex justify-between font-semibold text-base border-t pt-1"><span>Total</span><span>{fmt(Number(inv.total))}</span></div>
+                {inv.stock_only ? (
+                  <p className="pt-1 text-xs text-muted-foreground">Stock only — no payment or supplier due recorded (accounts kept separately).</p>
+                ) : <>
                 <div className="flex justify-between text-emerald-600"><span>Paid</span><span>{fmt(Number(inv.paid))}</span></div>
                 {Number(inv.credit_applied) > 0 && (
                   <div className="flex justify-between text-xs text-muted-foreground"><span>of which from supplier advance</span><span>{fmt(Number(inv.credit_applied))}</span></div>
                 )}
                 <div className="flex justify-between text-destructive font-medium"><span>Due</span><span>{fmt(Number(inv.due))}</span></div>
+                </>}
               </div>
             </div>
             {rets.length > 0 && (
@@ -627,7 +633,7 @@ function Info({ label, value }: { label: string; value: any }) {
 
 /* ---------------- Return ---------------- */
 
-function ReturnDialog({ invoiceId, onClose, onDone }: { invoiceId: string; onClose: () => void; onDone: () => void }) {
+function ReturnDialog({ invoiceId, stockOnly = false, onClose, onDone }: { invoiceId: string; stockOnly?: boolean; onClose: () => void; onDone: () => void }) {
   const [reason, setReason] = useState("");
   const [refundMethod, setRefundMethod] = useState<string>("adjust_due");
   const [qtyMap, setQtyMap] = useState<Record<string, string>>({});
@@ -708,6 +714,9 @@ function ReturnDialog({ invoiceId, onClose, onDone }: { invoiceId: string; onClo
             <Label>Reason</Label>
             <Textarea value={reason} onChange={e => setReason(e.target.value)} rows={3} placeholder="Damaged / expired / wrong item..." />
           </div>
+          {stockOnly ? (
+            <p className="self-end rounded-md bg-muted/60 p-3 text-xs text-muted-foreground">Stock-only purchase: the items leave stock. No money or supplier due is recorded.</p>
+          ) : (
           <div>
             <Label>Refund Method</Label>
             <Select value={refundMethod} onValueChange={setRefundMethod}>
@@ -720,6 +729,7 @@ function ReturnDialog({ invoiceId, onClose, onDone }: { invoiceId: string; onClo
               </SelectContent>
             </Select>
           </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
