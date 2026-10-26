@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { Truck, Plus, Trash2, Eye, RotateCcw, Wallet, Printer, X, Barcode, Upload } from "lucide-react";
+import { Truck, Plus, Trash2, Eye, RotateCcw, Wallet, Printer, X, Barcode, Upload, Pencil } from "lucide-react";
 import { BarcodeLabelDialog, type LabelProduct } from "@/components/BarcodeLabelDialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/PageHeader";
@@ -15,7 +15,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import { PurchaseEntryDialog } from "@/components/PurchaseEntryDialog";
+import { PurchaseEntryDialog, type EditPurchase } from "@/components/PurchaseEntryDialog";
+import { useAuth } from "@/lib/auth-context";
 
 
 export const Route = createFileRoute("/_authenticated/purchases")({
@@ -131,6 +132,24 @@ type Invoice = {
 function PurchasesPage() {
   const qc = useQueryClient();
   const [openCreate, setOpenCreate] = useState(false);
+  const [editPurchase, setEditPurchase] = useState<EditPurchase | null>(null);
+  const { hasRole } = useAuth();
+  const isAdmin = hasRole("admin");
+  const openEdit = async (inv: Invoice) => {
+    const { data, error } = await supabase.from("purchase_invoice_items")
+      .select("product_id,quantity,discount,line_total,batch_no,expiry_date,returned_quantity").eq("invoice_id", inv.id).order("created_at");
+    if (error) { toast.error(error.message); return; }
+    if ((data ?? []).some((r: any) => Number(r.returned_quantity) > 0)) { toast.error("This purchase has a return, so it cannot be edited."); return; }
+    setEditPurchase({
+      id: inv.id, invoice_no: inv.invoice_no, supplier_id: inv.supplier_id, supplier_invoice_no: inv.supplier_invoice_no,
+      invoice_date: inv.invoice_date, discount: Number(inv.discount), vat: Number(inv.vat), freight: Number(inv.freight),
+      notes: inv.notes, stock_only: !!inv.stock_only, paid: Number(inv.paid),
+      items: (data ?? []).filter((r: any) => r.product_id).map((r: any) => ({
+        product_id: r.product_id, quantity: Number(r.quantity), discount: Number(r.discount), line_total: Number(r.line_total),
+        batch_no: r.batch_no, expiry_date: r.expiry_date,
+      })),
+    });
+  };
   const [startUpload, setStartUpload] = useState(false);
   const [viewId, setViewId] = useState<string | null>(null);
   const [returnFor, setReturnFor] = useState<string | null>(null);
@@ -277,6 +296,9 @@ function PurchasesPage() {
                           {Number(inv.due) > 0 && (
                             <Button size="icon" variant="ghost" title="Pay" onClick={() => setPayFor(inv)}><Wallet className="h-4 w-4" /></Button>
                           )}
+                          {isAdmin && inv.status !== "returned" && inv.status !== "partially_returned" && (
+                            <Button size="icon" variant="ghost" title="Edit" aria-label={`Edit ${inv.invoice_no}`} onClick={() => void openEdit(inv)}><Pencil className="h-4 w-4" /></Button>
+                          )}
                           <PurchaseLabelsButton invoiceId={inv.id} invoiceNo={inv.invoice_no} />
                           {inv.status !== "returned" && (
                             <Button size="icon" variant="ghost" title="Return" onClick={() => setReturnFor(inv.id)}><RotateCcw className="h-4 w-4" /></Button>
@@ -363,6 +385,23 @@ function PurchasesPage() {
             qc.invalidateQueries({ queryKey: ["products"] });
       qc.invalidateQueries({ queryKey: ["pos-products"] });
             qc.invalidateQueries({ queryKey: ["batches"] });
+          }}
+        />
+      )}
+
+      {editPurchase && (
+        <PurchaseEntryDialog
+          key={editPurchase.id}
+          open
+          editing={editPurchase}
+          refreshProducts={() => qc.refetchQueries({ queryKey: ["products-purchase"] })}
+          onOpenChange={(o) => { if (!o) setEditPurchase(null); }}
+          suppliers={suppliers}
+          products={products}
+          onCreated={() => {
+            for (const k of ["purchase_invoices", "suppliers", "products-purchase", "products", "pos-products", "batches", "purchase_invoice_items"]) {
+              qc.invalidateQueries({ queryKey: [k] });
+            }
           }}
         />
       )}

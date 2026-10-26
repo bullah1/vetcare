@@ -29,6 +29,13 @@ import {
 export type EntryProduct = SearchProduct & { selling_price: number };
 export type EntrySupplier = { id: string; name: string; phone: string | null; balance_due: number };
 
+/** An existing purchase opened for editing. */
+export type EditPurchase = {
+  id: string; invoice_no: string; supplier_id: string | null; supplier_invoice_no: string | null; invoice_date: string;
+  discount: number; vat: number; freight: number; notes: string | null; stock_only: boolean; paid: number;
+  items: { product_id: string; quantity: number; discount: number; line_total: number; batch_no: string | null; expiry_date: string | null }[];
+};
+
 type Row = LineInput & {
   key: string;
   product_id: string;
@@ -49,7 +56,7 @@ const emptyLine = (): LineInput => ({ quantity: "", unit_price: "", total: "", s
 const focusSelect = (el: HTMLInputElement | null) => { el?.focus(); el?.select(); };
 
 export function PurchaseEntryDialog({
-  open, onOpenChange, suppliers, products, onCreated, startWithUpload = false, refreshProducts,
+  open, onOpenChange, suppliers, products, onCreated, startWithUpload = false, refreshProducts, editing,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -58,20 +65,35 @@ export function PurchaseEntryDialog({
   onCreated: (created?: { id: string; invoice_no?: string }) => void;
   startWithUpload?: boolean;
   refreshProducts: () => Promise<unknown>;
+  /** Open an existing purchase to change it (same invoice number; stock moves by the difference). */
+  editing?: EditPurchase | null;
 }) {
-  const [uploadOpen, setUploadOpen] = useState(startWithUpload);
-  const [supplierId, setSupplierId] = useState("");
-  const [supplierInvoiceNo, setSupplierInvoiceNo] = useState("");
-  const [invoiceDate, setInvoiceDate] = useState(todayDhaka());
-  const [notes, setNotes] = useState("");
-  const [rows, setRows] = useState<Row[]>([]);
+  const [uploadOpen, setUploadOpen] = useState(startWithUpload && !editing);
+  const [supplierId, setSupplierId] = useState(editing?.supplier_id ?? "");
+  const [supplierInvoiceNo, setSupplierInvoiceNo] = useState(editing?.supplier_invoice_no ?? "");
+  const [invoiceDate, setInvoiceDate] = useState(editing?.invoice_date ?? todayDhaka());
+  const [notes, setNotes] = useState(editing?.notes ?? "");
+  const [rows, setRows] = useState<Row[]>(() => (editing?.items ?? []).map((it) => {
+    // Rebuild the line from its saved total, so the exact unit price comes back.
+    const disc = Number(it.discount) || 0;
+    const gross = Number(it.line_total) + disc;
+    const p = products.find((x) => x.id === it.product_id);
+    return {
+      ...onTotal({ ...emptyLine(), quantity: fmtField(Number(it.quantity), 2) }, fmtField(gross, 2)),
+      disc_value: disc ? fmtField(disc, 2) : "", disc_kind: "amt" as AmountKind,
+      key: newKey(), product_id: it.product_id,
+      new_selling_price: p?.selling_price ? String(p.selling_price) : "",
+      batch_no: it.batch_no ?? "", expiry_date: it.expiry_date ?? "",
+    };
+  }));
 
   // Totals inputs
-  const [discValue, setDiscValue] = useState("");
+  const amt = (n?: number) => (Number(n) ? fmtField(Number(n), 2) : "");
+  const [discValue, setDiscValue] = useState(amt(editing?.discount));
   const [discKind, setDiscKind] = useState<AmountKind>("amt");
-  const [vatValue, setVatValue] = useState("");
+  const [vatValue, setVatValue] = useState(amt(editing?.vat));
   const [vatKind, setVatKind] = useState<AmountKind>("amt");
-  const [charges, setCharges] = useState("");
+  const [charges, setCharges] = useState(amt(editing?.freight));
 
   // Entry bar
   const [entryProduct, setEntryProduct] = useState<EntryProduct | null>(null);
@@ -89,7 +111,7 @@ export function PurchaseEntryDialog({
     () => invoiceTotals(rows, { overall_disc_value: discValue, overall_disc_kind: discKind, vat_value: vatValue, vat_kind: vatKind, charges }),
     [rows, discValue, discKind, vatValue, vatKind, charges],
   );
-  const dirty = rows.length > 0 || !!entryProduct;
+  const dirty = editing ? true : rows.length > 0 || !!entryProduct;
 
   // ---------- entry bar ----------
   const pickProduct = (p: SearchProduct) => {
@@ -196,19 +218,42 @@ export function PurchaseEntryDialog({
         throw new Error("Discount, VAT and charges must be numbers of 0 or more");
       }
 
+      const items = rows.map((r) => ({
+        product_id: r.product_id,
+        quantity: num(r.quantity),
+        purchase_price: exactUnitPrice(r),
+        discount: lineAmounts(r).discount,
+        new_selling_price: num(r.new_selling_price),
+        batch_no: r.batch_no.trim() || null,
+        expiry_date: r.expiry_date || null,
+      }));
+
+      if (editing) {
+        const { data, error } = await supabase.rpc("update_purchase_invoice" as any, {
+          _invoice_id: editing.id,
+          _supplier_id: supplierId || null,
+          _supplier_invoice_no: supplierInvoiceNo.trim() || null,
+          _invoice_date: invoiceDate,
+          _items: items,
+          _discount: totals.overallDiscount,
+          _vat: totals.vat,
+          _freight: totals.charges,
+          _notes: notes.trim() || null,
+        });
+        if (error) {
+          if (/update_purchase_invoice|PGRST202|schema cache/i.test(`${error.message} ${(error as any).code ?? ""}`)) {
+            throw new Error("Run the purchase edit SQL in Supabase first, then save again. Nothing was changed.");
+          }
+          throw error;
+        }
+        return data as any;
+      }
+
       const { data, error } = await supabase.rpc("create_purchase_invoice" as any, {
         _supplier_id: supplierId || null,
         _supplier_invoice_no: supplierInvoiceNo.trim() || null,
         _invoice_date: invoiceDate,
-        _items: rows.map((r) => ({
-          product_id: r.product_id,
-          quantity: num(r.quantity),
-          purchase_price: exactUnitPrice(r),
-          discount: lineAmounts(r).discount,
-          new_selling_price: num(r.new_selling_price),
-          batch_no: r.batch_no.trim() || null,
-          expiry_date: r.expiry_date || null,
-        })),
+        _items: items,
         _discount: totals.overallDiscount,
         _vat: totals.vat,
         _freight: totals.charges,
@@ -227,7 +272,7 @@ export function PurchaseEntryDialog({
       return data as any;
     },
     onSuccess: (data) => {
-      toast.success(`Purchase ${data?.invoice_no ?? ""} saved`);
+      toast.success(editing ? `Purchase ${editing.invoice_no} updated` : `Purchase ${data?.invoice_no ?? ""} saved`);
       onCreated(data ? { id: data.id, invoice_no: data.invoice_no } : undefined);
       onOpenChange(false);
     },
@@ -244,7 +289,7 @@ export function PurchaseEntryDialog({
   const requestClose = (v: boolean) => {
     if (v) return onOpenChange(true);
     if (create.isPending) return;
-    if (dirty && !confirm("Close without saving? The products you added will be lost.")) return;
+    if (dirty && !confirm(editing ? "Close without saving? Your changes will be lost." : "Close without saving? The products you added will be lost.")) return;
     onOpenChange(false);
   };
 
@@ -266,7 +311,7 @@ export function PurchaseEntryDialog({
       >
         {/* Header: supplier + invoice details */}
         <div className="border-b px-4 py-3 pr-12 sm:px-5">
-          <DialogTitle className="text-lg font-semibold">New purchase</DialogTitle>
+          <DialogTitle className="text-lg font-semibold">{editing ? `Edit purchase ${editing.invoice_no}` : "New purchase"}</DialogTitle>
           <DialogDescription className="sr-only">Add products with the keyboard and save the purchase invoice.</DialogDescription>
           <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,160px)]">
             <div className="col-span-2 min-w-0 sm:col-span-1">
@@ -385,12 +430,14 @@ export function PurchaseEntryDialog({
               <span className="text-2xl font-bold tabular-nums">{money(totals.net)}</span>
             </div>
             <p className="rounded-md bg-muted/60 px-2.5 py-1.5 text-xs text-muted-foreground">
-              Stock only: products go into stock. No payment, cash or supplier due is recorded — accounts are kept separately.
+              {editing
+                ? <>Saving changes stock by the difference only (same invoice number).{!editing.stock_only && Number(editing.paid) > 0 ? ` Paid ${money(Number(editing.paid))} stays; the supplier due is recalculated.` : ""}</>
+                : "Stock only: products go into stock. No payment, cash or supplier due is recorded — accounts are kept separately."}
             </p>
             <div className="flex gap-2 pt-1">
               <Button type="button" variant="outline" className="flex-1" onClick={() => requestClose(false)} disabled={create.isPending}>Cancel</Button>
               <Button type="button" className="flex-[2]" onClick={save} disabled={create.isPending || rows.length === 0}>
-                {create.isPending ? "Saving…" : <>Save purchase <span className="ml-1 hidden text-xs opacity-75 sm:inline">Ctrl+Enter</span></>}
+                {create.isPending ? "Saving…" : <>{editing ? "Save changes" : "Save purchase"} <span className="ml-1 hidden text-xs opacity-75 sm:inline">Ctrl+Enter</span></>}
               </Button>
             </div>
           </div>
