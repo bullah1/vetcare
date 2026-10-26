@@ -32,7 +32,20 @@ export type Employee = {
   attendance_from?: string | null;
 };
 export type AttendanceRow = { id?: string; employee_id: string; work_date: string; status: AttendanceStatus; check_in: string | null; note?: string | null };
-export type SalaryItem = { id: string; employee_id: string; month: string; kind: "bonus" | "deduction" | "advance"; amount: number; note: string | null };
+export type SalaryItemKind = "bonus" | "deduction" | "advance";
+export type SalaryItem = { id: string; employee_id: string; month: string; kind: SalaryItemKind; amount: number; note: string | null; item_date?: string | null };
+
+export const ITEM_KIND_LABEL: Record<SalaryItemKind, string> = { deduction: "Fine / deduction", advance: "Advance", bonus: "Bonus" };
+
+/** Ready-made reasons, picked with one tap (anything else can still be typed). */
+export const PRESET_REASONS: Record<SalaryItemKind, string[]> = {
+  deduction: [
+    "দেরিতে আসা", "অনুমতি ছাড়া অনুপস্থিত", "আগে চলে যাওয়া", "জিনিস ভাঙা / নষ্ট", "ক্যাশে টাকা কম",
+    "কাজে অবহেলা", "ডিউটিতে মোবাইল ব্যবহার", "ইউনিফর্ম না পরা", "গ্রাহকের সাথে খারাপ ব্যবহার",
+  ],
+  advance: ["অগ্রিম বেতন", "জরুরি প্রয়োজনে অগ্রিম"],
+  bonus: ["ঈদ বোনাস", "উৎসব বোনাস", "ভালো কাজের জন্য", "অতিরিক্ত সময় কাজ (ওভারটাইম)"],
+};
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 

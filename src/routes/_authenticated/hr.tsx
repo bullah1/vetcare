@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
-  IdCard, Plus, Pencil, ChevronLeft, ChevronRight, Phone, Clock, CalendarOff, UserCheck, FileDown, Printer, Trash2, Banknote, CheckCircle2,
+  FileText, IdCard, Plus, Pencil, ChevronLeft, ChevronRight, Phone, Clock, CalendarOff, UserCheck, FileDown, Printer, Trash2, Banknote, CheckCircle2,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth-context";
@@ -17,14 +17,14 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { todayDhaka } from "@/lib/sales-ledger";
 import { exportToExcel } from "@/lib/export-excel";
 import { cn } from "@/lib/utils";
 import {
-  STATUS_META, STATUS_ORDER, WEEKDAYS, WEEKDAYS_LONG, fmtTime, isLate, monthDays, monthSalary, weekday,
-  type AttendanceRow, type AttendanceStatus, type Employee, type SalaryItem, type SalarySummary,
+  ITEM_KIND_LABEL, PRESET_REASONS, STATUS_META, STATUS_ORDER, WEEKDAYS, WEEKDAYS_LONG, fmtTime, isLate, monthDays, monthSalary, weekday,
+  type AttendanceRow, type AttendanceStatus, type Employee, type SalaryItem, type SalaryItemKind, type SalarySummary,
 } from "@/lib/hr";
+import { printSalarySlips } from "@/lib/salary-slip";
 
 export const Route = createFileRoute("/_authenticated/hr")({
   head: () => ({ meta: [{ title: "HR & Salary — Pet Care Vet ERP" }] }),
@@ -419,7 +419,11 @@ function ProfileDialog({ employee: e, today, isAdmin, onClose, onEdit }: { emplo
   const att = (data?.attendance ?? []).filter((a) => a.employee_id === e.id);
   const items = (data?.items ?? []).filter((i) => i.employee_id === e.id);
   const byDate = new Map(att.map((a) => [a.work_date, a]));
+  const itemsByDate = new Map<string, SalaryItem[]>();
+  for (const i of items) if (i.item_date) itemsByDate.set(i.item_date, [...(itemsByDate.get(i.item_date) ?? []), i]);
   const s = monthSalary(e, month, att, items, today);
+  const paid = (data?.payments ?? []).find((p) => p.employee_id === e.id) ?? null;
+  const recent = (data?.items ?? []).map((i) => i.note ?? "").filter(Boolean);
   const days = monthDays(month);
   const lead = weekday(days[0]);
   const leaves = att.filter((a) => a.status === "leave" || a.status === "paid_leave" || a.status === "absent").sort((a, b) => a.work_date.localeCompare(b.work_date));
@@ -447,7 +451,12 @@ function ProfileDialog({ employee: e, today, isAdmin, onClose, onEdit }: { emplo
             <span className="w-36 text-center text-sm font-medium">{monthLabel(month)}</span>
             <Button variant="outline" size="icon" className="h-8 w-8" disabled={!isAdmin && month >= today.slice(0, 7)} onClick={() => setMonth(shiftMonth(month, 1))} aria-label="Next month"><ChevronRight className="h-4 w-4" /></Button>
           </div>
-          {onEdit && <Button variant="ghost" size="sm" onClick={() => onEdit(e)}><Pencil className="h-4 w-4" /> Edit</Button>}
+          <div className="flex gap-1">
+            <Button variant="outline" size="sm" onClick={() => printSalarySlips([{ e, s, items, attendance: att, paid }], month, today)}>
+              <FileText className="h-4 w-4" /> Salary slip
+            </Button>
+            {onEdit && <Button variant="ghost" size="sm" onClick={() => onEdit(e)}><Pencil className="h-4 w-4" /> Edit</Button>}
+          </div>
         </div>
 
         <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_260px]">
@@ -463,21 +472,27 @@ function ProfileDialog({ employee: e, today, isAdmin, onClose, onEdit }: { emplo
                 // Admin: any day from joining (also future, e.g. planned leave). Others: today only.
                 const future = d < e.join_date || (isAdmin ? false : d !== today);
                 const late = a && isLate(a.check_in, e.duty_start);
+                const dayItems = itemsByDate.get(d) ?? [];
+                const fined = dayItems.some((i) => i.kind !== "bonus");
                 return (
                   <Popover key={d}>
-                    <PopoverTrigger asChild disabled={future}>
-                      <button type="button" disabled={future} title={a ? STATUS_META[a.status].label : off ? "Weekly off" : d < today && d >= (e.attendance_from ?? "") ? "Not marked — counted as absent" : "Not marked"}
+                    <PopoverTrigger asChild disabled={future && dayItems.length === 0}>
+                      <button type="button" disabled={future && dayItems.length === 0} title={a ? STATUS_META[a.status].label : off ? "Weekly off" : d < today && d >= (e.attendance_from ?? "") ? "Not marked — counted as absent" : "Not marked"}
                         className={cn("relative flex aspect-square flex-col items-center justify-center rounded-md border text-xs disabled:opacity-40",
                           a ? cn(STATUS_META[a.status].tone, "border-transparent") : off ? "bg-muted text-muted-foreground" : "bg-background hover:bg-muted")}>
                         <span className="font-semibold tabular-nums">{Number(d.slice(8))}</span>
                         <span className="text-[9px] leading-none opacity-90">{a ? STATUS_META[a.status].short : off ? "Off" : ""}</span>
-                        {late && <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-amber-300 ring-1 ring-white" title="Late" />}
+                        {late && <span className="absolute left-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-amber-300 ring-1 ring-white" title="Late" />}
+                        {dayItems.length > 0 && (
+                          <span className={cn("absolute right-0.5 top-0.5 rounded px-0.5 text-[9px] font-bold leading-tight", fined ? "bg-red-600 text-white" : "bg-emerald-600 text-white")}
+                            title={dayItems.map((i) => `${ITEM_KIND_LABEL[i.kind]} ${money(i.amount)}: ${i.note ?? ""}`).join("\n")}>৳</span>
+                        )}
                       </button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-64 space-y-2 p-3">
+                    <PopoverContent className="w-80 space-y-2 p-3">
                       <p className="text-sm font-medium">{dateLabel(d)}{off ? " (weekly off)" : ""}</p>
-                      <StatusButtons compact value={a?.status ?? null} disabled={setAtt.isPending}
-                        onPick={(st) => setAtt.mutate({ employeeId: e.id, date: d, status: a?.status === st ? null : st, checkIn: a?.check_in ?? null })} />
+                      {!future && <StatusButtons compact value={a?.status ?? null} disabled={setAtt.isPending}
+                        onPick={(st) => setAtt.mutate({ employeeId: e.id, date: d, status: a?.status === st ? null : st, checkIn: a?.check_in ?? null })} />}
                       {isAdmin && a && (a.status === "present" || a.status === "half_day") && (
                         <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                           Came at
@@ -488,7 +503,14 @@ function ProfileDialog({ employee: e, today, isAdmin, onClose, onEdit }: { emplo
                             }} />
                         </label>
                       )}
-                      <p className="text-[11px] text-muted-foreground">P present · ½ half day · PL paid leave · L leave · A absent. Tap again to clear.</p>
+                      {!future && <p className="text-[11px] text-muted-foreground">P present · ½ half day · PL paid leave · L leave · A absent. Tap again to clear.</p>}
+                      {dayItems.length > 0 && <SalaryItemList items={dayItems} isAdmin={isAdmin} showDate={false} />}
+                      {isAdmin && (
+                        <div className="border-t pt-2">
+                          <p className="mb-1.5 text-xs font-medium">Fine, advance or bonus on this day</p>
+                          <SalaryItemForm employeeId={e.id} fixedDate={d} recent={recent} compact />
+                        </div>
+                      )}
                     </PopoverContent>
                   </Popover>
                 );
@@ -566,16 +588,24 @@ function SalaryTab({ employees, today, onOpen, isAdmin }: { employees: Employee[
   const total = rows.reduce((t, r) => t + r.s.net, 0);
   const paidTotal = rows.reduce((t, r) => t + (r.paid ? Number(r.paid.amount) : 0), 0);
 
+  const reasonsOf = (id: string) => (data?.items ?? []).filter((i) => i.employee_id === id)
+    .map((i) => `${ITEM_KIND_LABEL[i.kind]} ${num(i.amount)}${i.item_date ? ` (${i.item_date})` : ""}${i.note ? `: ${i.note}` : ""}`).join("; ");
+  const slips = () => rows.map(({ e, s, paid }) => ({
+    e, s, paid,
+    items: (data?.items ?? []).filter((i) => i.employee_id === e.id),
+    attendance: (data?.attendance ?? []).filter((a) => a.employee_id === e.id),
+  }));
   const exportRows = () => rows.map(({ e, s, paid }) => ({
     Name: e.full_name, Designation: e.designation ?? "", "Monthly salary": s.salary, "Working days": s.workingDays,
     Present: s.present, "Half day": s.halfDays, "Paid leave": s.paidLeave, Leave: s.leave, Absent: s.absent, Late: s.late,
     "Off days worked": s.offDayWorked, "Cut": s.deduction, "Off-day extra": s.offDayExtra, Bonus: s.bonus,
     "Other deduction": s.manualDeduction, Advance: s.advance, "Net salary": s.net, Paid: paid ? Number(paid.amount) : "",
+    "Fines / advance / bonus (reasons)": reasonsOf(e.id), Phone: e.phone ?? "",
   }));
   const print = () => {
     const w = window.open("", "_blank", "width=1100,height=800");
     if (!w) return;
-    const r = exportRows();
+    const r = exportRows().map(({ ["Fines / advance / bonus (reasons)"]: _r, Phone: _p, ...x }) => x);
     const head = Object.keys(r[0] ?? {});
     w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Salary ${monthLabel(month)}</title>
       <style>body{font:12px system-ui,sans-serif;margin:24px}h1{font-size:18px;margin:0 0 4px}table{border-collapse:collapse;width:100%;margin-top:12px}
@@ -595,8 +625,9 @@ function SalaryTab({ employees, today, onOpen, isAdmin }: { employees: Employee[
         <span className="w-36 text-center font-medium">{monthLabel(month)}</span>
         <Button variant="outline" size="icon" className="h-9 w-9" disabled={month >= today.slice(0, 7)} onClick={() => setMonth(shiftMonth(month, 1))} aria-label="Next month"><ChevronRight className="h-4 w-4" /></Button>
         <div className="ml-auto flex gap-2">
+          <Button size="sm" disabled={!rows.length} onClick={() => printSalarySlips(slips(), month, today)}><FileText className="h-4 w-4" /> Salary slips (PDF)</Button>
           <Button variant="outline" size="sm" disabled={!rows.length} onClick={() => exportToExcel(exportRows(), `salary-${month}`, "Salary")}><FileDown className="h-4 w-4" /> Excel</Button>
-          <Button variant="outline" size="sm" disabled={!rows.length} onClick={print}><Printer className="h-4 w-4" /> Print</Button>
+          <Button variant="outline" size="sm" disabled={!rows.length} onClick={print}><Printer className="h-4 w-4" /> Print sheet</Button>
         </div>
       </div>
 
@@ -630,8 +661,14 @@ function SalaryTab({ employees, today, onOpen, isAdmin }: { employees: Employee[
                 <td className="px-2 py-2 text-right tabular-nums text-destructive">{s.advance + s.manualDeduction ? `− ${money(s.advance + s.manualDeduction)}` : "—"}</td>
                 <td className="px-2 py-2 text-right font-semibold tabular-nums">{money(s.net)}</td>
                 <td className="px-3 py-2 text-right">
-                  {paid ? <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600"><CheckCircle2 className="h-3.5 w-3.5" /> {money(paid.amount)}</span>
-                    : <span className="text-xs text-muted-foreground">Not paid</span>}
+                  {paid ? (
+                    <span className="inline-flex flex-col items-end text-xs font-medium">
+                      <span className="inline-flex items-center gap-1 text-emerald-600"><CheckCircle2 className="h-3.5 w-3.5" /> {money(paid.amount)}</span>
+                      {Math.abs(s.net - Number(paid.amount)) >= 0.01 && (
+                        <span className="text-destructive">{s.net > Number(paid.amount) ? `${money(s.net - Number(paid.amount))} still due` : `${money(Number(paid.amount) - s.net)} paid extra`}</span>
+                      )}
+                    </span>
+                  ) : <span className="text-xs text-muted-foreground">Not paid</span>}
                 </td>
               </tr>
             ))}
@@ -652,37 +689,23 @@ function SalaryTab({ employees, today, onOpen, isAdmin }: { employees: Employee[
       {detail && (() => {
         const r = rows.find((x) => x.e.id === detail.id);
         if (!r) return null;
-        return <SalaryDetailDialog e={r.e} s={r.s} month={month} items={(data?.items ?? []).filter((i) => i.employee_id === r.e.id)} paid={r.paid} isAdmin={isAdmin}
+        return <SalaryDetailDialog e={r.e} s={r.s} month={month} today={today} items={(data?.items ?? []).filter((i) => i.employee_id === r.e.id)} paid={r.paid} isAdmin={isAdmin}
+          attendance={(data?.attendance ?? []).filter((a) => a.employee_id === r.e.id)} recent={(data?.items ?? []).map((i) => i.note ?? "").filter(Boolean)}
           onClose={() => setDetail(null)} onProfile={() => { setDetail(null); onOpen(r.e); }} />;
       })()}
     </div>
   );
 }
 
-function SalaryDetailDialog({ e, s, month, items, paid, isAdmin, onClose, onProfile }: {
-  e: Employee; s: SalarySummary; month: string; items: SalaryItem[]; paid: { id: string; amount: number; paid_on: string } | null; isAdmin: boolean;
+function SalaryDetailDialog({ e, s, month, today, items, attendance, recent, paid, isAdmin, onClose, onProfile }: {
+  e: Employee; s: SalarySummary; month: string; today: string; items: SalaryItem[]; attendance: AttendanceRow[]; recent: string[];
+  paid: { id: string; amount: number; paid_on: string } | null; isAdmin: boolean;
   onClose: () => void; onProfile: () => void;
 }) {
   const qc = useQueryClient();
-  const [kind, setKind] = useState<SalaryItem["kind"]>("advance");
-  const [amount, setAmount] = useState("");
-  const [note, setNote] = useState("");
   const done = () => qc.invalidateQueries({ queryKey: ["hr"] });
-  const addItem = useMutation({
-    mutationFn: async () => {
-      const a = Number(amount);
-      if (!(a > 0)) throw new Error("Enter an amount above 0");
-      const { error } = await db.from("hr_salary_items").insert({ employee_id: e.id, month: `${month}-01`, kind, amount: a, note: note.trim() || null });
-      if (error) throw error;
-    },
-    onSuccess: () => { setAmount(""); setNote(""); done(); },
-    onError: (x: any) => toast.error(x?.message ?? "Could not add"),
-  });
-  const delItem = useMutation({
-    mutationFn: async (id: string) => { const { error } = await db.from("hr_salary_items").delete().eq("id", id); if (error) throw error; },
-    onSuccess: done,
-    onError: (x: any) => toast.error(x?.message ?? "Could not delete"),
-  });
+  const days = monthDays(month);
+  const defaultDate = today.startsWith(month) ? today : days[days.length - 1];
   const markPaid = useMutation({
     mutationFn: async (on: boolean) => {
       const { error } = on
@@ -693,52 +716,46 @@ function SalaryDetailDialog({ e, s, month, items, paid, isAdmin, onClose, onProf
     onSuccess: (_, on) => { toast.success(on ? "Marked as paid" : "Paid mark removed"); done(); },
     onError: (x: any) => toast.error(x?.message ?? "Could not save"),
   });
-  const KIND_LABEL = { bonus: "Bonus", deduction: "Deduction", advance: "Advance" } as const;
-
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>{e.full_name} — {monthLabel(month)}</DialogTitle>
-          <DialogDescription><button type="button" className="underline-offset-2 hover:underline" onClick={onProfile}>Open profile and attendance</button></DialogDescription>
+          <DialogDescription className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <button type="button" className="underline-offset-2 hover:underline" onClick={onProfile}>Open calendar and attendance</button>
+            <button type="button" className="inline-flex items-center gap-1 font-medium text-primary underline-offset-2 hover:underline"
+              onClick={() => printSalarySlips([{ e, s, items, attendance, paid }], month, today)}>
+              <FileText className="h-3.5 w-3.5" /> Salary slip (PDF)
+            </button>
+          </DialogDescription>
         </DialogHeader>
         <SalaryBreakdown s={s} />
         <div className="space-y-2">
-          <p className="text-sm font-medium">Bonus, deduction or advance</p>
-          {items.length > 0 && (
-            <ul className="divide-y rounded-md border text-sm">
-              {items.map((i) => (
-                <li key={i.id} className="flex items-center gap-2 px-3 py-1.5">
-                  <span className={cn("w-20 text-xs font-medium", i.kind === "bonus" ? "text-emerald-600" : "text-destructive")}>{KIND_LABEL[i.kind]}</span>
-                  <span className="min-w-0 flex-1 truncate text-muted-foreground">{i.note}</span>
-                  <span className="tabular-nums">{money(i.amount)}</span>
-                  {isAdmin && <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => delItem.mutate(i.id)} aria-label="Delete"><Trash2 className="h-3.5 w-3.5" /></Button>}
-                </li>
-              ))}
-            </ul>
+          <p className="text-sm font-medium">Fines, advance and bonus</p>
+          {items.length > 0 ? <SalaryItemList items={items} isAdmin={isAdmin} /> : <p className="text-sm text-muted-foreground">None this month</p>}
+          {isAdmin && (
+            <div className="rounded-lg border bg-muted/30 p-3">
+              <SalaryItemForm employeeId={e.id} defaultDate={defaultDate} minDate={days[0]} maxDate={days[days.length - 1]} recent={recent} />
+            </div>
           )}
-          {!isAdmin && items.length === 0 && <p className="text-sm text-muted-foreground">None</p>}
-          {isAdmin && <div className="grid grid-cols-[110px_minmax(0,1fr)_minmax(0,1.3fr)_auto] gap-2">
-            <Select value={kind} onValueChange={(v) => setKind(v as SalaryItem["kind"])}>
-              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="advance">Advance</SelectItem>
-                <SelectItem value="bonus">Bonus</SelectItem>
-                <SelectItem value="deduction">Deduction</SelectItem>
-              </SelectContent>
-            </Select>
-            <Input className="h-9 text-right" inputMode="decimal" placeholder="৳ amount" value={amount} onChange={(x) => setAmount(x.target.value)}
-              onKeyDown={(x) => { if (x.key === "Enter") addItem.mutate(); }} />
-            <Input className="h-9" placeholder="Note (optional)" value={note} onChange={(x) => setNote(x.target.value)}
-              onKeyDown={(x) => { if (x.key === "Enter") addItem.mutate(); }} />
-            <Button className="h-9" onClick={() => addItem.mutate()} disabled={addItem.isPending}><Plus className="h-4 w-4" /></Button>
-          </div>}
         </div>
         <DialogFooter className="gap-2 sm:justify-between">
           {paid ? (
             <>
-              <span className="flex items-center gap-1.5 text-sm text-emerald-600"><CheckCircle2 className="h-4 w-4" /> Paid {money(paid.amount)} on {paid.paid_on}</span>
-              {isAdmin && <Button variant="outline" onClick={() => markPaid.mutate(false)} disabled={markPaid.isPending}>Remove paid mark</Button>}
+              <span className="text-sm">
+                <span className="flex items-center gap-1.5 text-emerald-600"><CheckCircle2 className="h-4 w-4" /> Paid {money(paid.amount)} on {paid.paid_on}</span>
+                {Math.abs(s.net - Number(paid.amount)) >= 0.01 && (
+                  <span className="block text-xs font-medium text-destructive">
+                    Net is now {money(s.net)} — {s.net > Number(paid.amount) ? `${money(s.net - Number(paid.amount))} still due` : `${money(Number(paid.amount) - s.net)} paid extra`}
+                  </span>
+                )}
+              </span>
+              {isAdmin && (
+                <div className="flex gap-2">
+                  {Math.abs(s.net - Number(paid.amount)) >= 0.01 && <Button onClick={() => markPaid.mutate(true)} disabled={markPaid.isPending}>Update to {money(s.net)}</Button>}
+                  <Button variant="outline" onClick={() => markPaid.mutate(false)} disabled={markPaid.isPending}>Remove paid mark</Button>
+                </div>
+              )}
             </>
           ) : (
             <>
@@ -750,5 +767,108 @@ function SalaryDetailDialog({ e, s, month, items, paid, isAdmin, onClose, onProf
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/* ------------------------------------------------- fines / advance / bonus */
+
+function SalaryItemList({ items, isAdmin, showDate = true }: { items: SalaryItem[]; isAdmin: boolean; showDate?: boolean }) {
+  const qc = useQueryClient();
+  const del = useMutation({
+    mutationFn: async (id: string) => { const { error } = await db.from("hr_salary_items").delete().eq("id", id); if (error) throw error; },
+    onSuccess: () => { toast.success("Removed"); qc.invalidateQueries({ queryKey: ["hr"] }); },
+    onError: (x: any) => toast.error(x?.message ?? "Could not delete"),
+  });
+  const sorted = [...items].sort((a, b) => String(a.item_date ?? "").localeCompare(String(b.item_date ?? "")));
+  return (
+    <ul className="divide-y rounded-md border text-sm">
+      {sorted.map((i) => (
+        <li key={i.id} className="flex items-start gap-2 px-3 py-1.5">
+          <span className="min-w-0 flex-1">
+            <span className={cn("text-xs font-medium", i.kind === "bonus" ? "text-emerald-600" : "text-destructive")}>
+              {ITEM_KIND_LABEL[i.kind]}{showDate && i.item_date ? ` — ${new Date(`${i.item_date}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" })}` : ""}
+            </span>
+            <span className="block break-words text-muted-foreground">{i.note || "No reason written"}</span>
+          </span>
+          <span className="shrink-0 pt-0.5 tabular-nums">{i.kind === "bonus" ? "+" : "−"} {money(i.amount)}</span>
+          {isAdmin && (
+            <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" disabled={del.isPending}
+              onClick={() => confirm(`Remove this ${ITEM_KIND_LABEL[i.kind].toLowerCase()} of ${money(i.amount)}?`) && del.mutate(i.id)} aria-label="Remove">
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Add a fine (deduction), advance or bonus with a date and a reason (ready-made reasons one tap away). */
+function SalaryItemForm({ employeeId, fixedDate, defaultDate, minDate, maxDate, recent = [], compact }: {
+  employeeId: string; fixedDate?: string; defaultDate?: string; minDate?: string; maxDate?: string; recent?: string[]; compact?: boolean;
+}) {
+  const qc = useQueryClient();
+  const [kind, setKind] = useState<SalaryItemKind>("deduction");
+  const [date, setDate] = useState(fixedDate ?? defaultDate ?? todayDhaka());
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const presets = PRESET_REASONS[kind];
+  const extra = Array.from(new Set(recent.map((r) => r.trim()).filter((r) => r && !Object.values(PRESET_REASONS).flat().includes(r)))).slice(0, 6);
+  const add = useMutation({
+    mutationFn: async () => {
+      const a = Number(amount);
+      if (!(a > 0)) throw new Error("Enter an amount above 0");
+      if (!reason.trim()) throw new Error("Pick or write a reason");
+      const d = fixedDate ?? date;
+      if (!d) throw new Error("Choose a date");
+      const { error } = await db.from("hr_salary_items").insert({
+        employee_id: employeeId, month: `${d.slice(0, 7)}-01`, item_date: d, kind, amount: a, note: reason.trim(),
+      });
+      if (error) {
+        if (/item_date/i.test(error.message)) throw new Error("Run the HR SQL update in Supabase first (adds the date of fines).");
+        throw error;
+      }
+    },
+    onSuccess: () => {
+      toast.success(`${ITEM_KIND_LABEL[kind]} of ${money(Number(amount))} added`);
+      setAmount(""); setReason("");
+      qc.invalidateQueries({ queryKey: ["hr"] });
+    },
+    onError: (x: any) => toast.error(x?.message ?? "Could not add"),
+  });
+  const enter = (x: React.KeyboardEvent) => { if (x.key === "Enter") { x.preventDefault(); add.mutate(); } };
+
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-3 gap-1" role="group" aria-label="Type">
+        {(["deduction", "advance", "bonus"] as const).map((k) => (
+          <button key={k} type="button" aria-pressed={kind === k} onClick={() => { setKind(k); setReason(""); }}
+            className={cn("h-8 rounded-md border text-xs font-medium",
+              kind === k ? (k === "bonus" ? "border-transparent bg-emerald-600 text-white" : "border-transparent bg-red-600 text-white") : "bg-background text-muted-foreground hover:bg-muted")}>
+            {k === "deduction" ? "Fine" : ITEM_KIND_LABEL[k]}
+          </button>
+        ))}
+      </div>
+      <div className={cn("grid gap-2", fixedDate ? "grid-cols-1" : "grid-cols-2")}>
+        {!fixedDate && (
+          <Input type="date" className="h-9" value={date} min={minDate} max={maxDate} onChange={(x) => setDate(x.target.value)} aria-label="Date" />
+        )}
+        <Input className="h-9 text-right" inputMode="decimal" placeholder="৳ amount" value={amount} onChange={(x) => setAmount(x.target.value)} onKeyDown={enter} aria-label="Amount" />
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {[...presets, ...(kind === "deduction" ? extra : [])].map((r) => (
+          <button key={r} type="button" onClick={() => setReason(r)}
+            className={cn("rounded-full border px-2 py-0.5 text-[11px]", reason === r ? "border-primary bg-primary/10 text-primary" : "bg-background text-muted-foreground hover:text-foreground")}>
+            {r}
+          </button>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <Input className="h-9" placeholder="Reason (tap one above or write)" value={reason} onChange={(x) => setReason(x.target.value)} onKeyDown={enter} aria-label="Reason" />
+        <Button className="h-9 shrink-0" onClick={() => add.mutate()} disabled={add.isPending}>
+          <Plus className="h-4 w-4" />{compact ? "" : " Add"}
+        </Button>
+      </div>
+    </div>
   );
 }

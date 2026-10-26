@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS public.hr_salary_items (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS hr_salary_items_month_idx ON public.hr_salary_items (month);
+-- Date of the fine / advance / bonus (shown on the calendar and the salary slip).
+ALTER TABLE public.hr_salary_items ADD COLUMN IF NOT EXISTS item_date date;
 
 -- "Salary paid" mark for a month (accounts are kept separately; this is a record only).
 CREATE TABLE IF NOT EXISTS public.hr_salary_payments (
