@@ -1074,7 +1074,9 @@ function POSPage() {
   // The delivery charge is part of the bill: it is paid with it, goes to the
   // cash drawer, counts in sales and is pure profit (no cost).
   const grandTotal = Math.round((totals.total + delChargeNum) * 100) / 100;
-  const prev = usePreviousDue(ownerId || null);
+  // Only this business's older due is shown and cleared here; the other one is shown for info.
+  const prev = usePreviousDue(ownerId || null, project);
+  const otherPrev = usePreviousDue(ownerId || null, project === "ss" ? "pcv" : "ss");
   const prevDue = prev.total;
   const resetDelivery = () => {
     setDelOn(false); setDelManId(""); setDelCharge(""); setDelAddress(""); setDelNote("");
@@ -1216,8 +1218,8 @@ function POSPage() {
         // Older dues: show them on the bill and clear them with any extra paid.
         try {
           snapshot.prevDue = split.old.length
-            ? await payPreviousDues(ownerId, split.old, rpc.sale_id, rpc.invoice_no)
-            : await fetchOpenBills(ownerId, rpc.sale_id).then((b) => {
+            ? await payPreviousDues(ownerId, split.old, rpc.sale_id, rpc.invoice_no, project)
+            : await fetchOpenBills(ownerId, rpc.sale_id, project).then((b) => {
                 const before = Math.round(b.reduce((a, x) => a + x.due, 0) * 100) / 100;
                 return { before, paid: 0, after: before };
               });
@@ -1681,7 +1683,7 @@ function POSPage() {
         {owed > 0.009 && (
           <div className="space-y-1 rounded-md border border-amber-300 bg-amber-50/70 p-2 text-sm dark:bg-amber-950/20">
             <div className="flex justify-between text-amber-900 dark:text-amber-200">
-              <span>Previous due ({prev.bills.length} bill{prev.bills.length > 1 ? "s" : ""})</span>
+              <span>Previous due — {projectLabel(project)} ({prev.bills.length} bill{prev.bills.length > 1 ? "s" : ""})</span>
               <span className="font-semibold tabular-nums">৳ {owed.toFixed(2)}</span>
             </div>
             <div className="flex justify-between font-semibold"><span>Total amount</span><span className="tabular-nums">৳ {(grandTotal + owed).toFixed(2)}</span></div>
@@ -1695,6 +1697,11 @@ function POSPage() {
               </Button>
             )}
           </div>
+        )}
+        {ownerId && otherPrev.total > 0.009 && (
+          <p className="text-xs text-muted-foreground">
+            Also owes ৳ {otherPrev.total.toFixed(2)} at {projectLabel(project === "ss" ? "pcv" : "ss")} — collect it on a {projectLabel(project === "ss" ? "pcv" : "ss")} bill or from Due Bills.
+          </p>
         )}
         {change > 0 && (
           <p className="flex justify-between text-sm"><span className="text-muted-foreground">Change to return</span><span className="font-semibold tabular-nums">৳ {change.toFixed(2)}</span></p>

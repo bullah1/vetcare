@@ -26,6 +26,8 @@ import { fetchAll, fetchAllIn } from "@/lib/fetch-all";
 import { grossOf, reversalAmount, dayRangeISO, VALID_STATUSES, deadSaleIds, monthStartDhaka, todayDhaka } from "@/lib/sales-ledger";
 import { useWhatsAppInvoice } from "@/lib/use-whatsapp-invoice";
 import { DeliveryDialog } from "@/components/DeliveryDialog";
+import { hasProjects } from "@/lib/business-report";
+import { PROJECTS, type Project } from "@/lib/projects";
 import { deliveryForReceipt, fetchActiveDelivery, fetchReceiptDelivery, DELIVERY_STATUS_LABEL } from "@/lib/deliveries";
 
 
@@ -125,6 +127,10 @@ function SalesHistoryPage() {
   const [to, setTo] = useState(today());
   const [status, setStatus] = useState<string>("all");
   const [method, setMethod] = useState<string>("all");
+  // Business filter (after the Projects SQL): every number below follows it.
+  const hasBizQ = useQuery({ queryKey: ["has-projects"], queryFn: hasProjects, staleTime: Infinity });
+  const [biz, setBiz] = useState<"all" | Project>("all");
+  const bizOn = !!hasBizQ.data && biz !== "all";
 
   const [detailId, setDetailId] = useState<string | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
@@ -141,7 +147,7 @@ function SalesHistoryPage() {
   // The old 500-row cap silently dropped invoices and made Revenue disagree
   // with Reports — never limit this query.
   const { data: allSales = [], isFetching, refetch } = useQuery({
-    queryKey: ["sales-history-page", q, from, to, status],
+    queryKey: ["sales-history-page", q, from, to, status, biz],
     queryFn: async () => {
       const { fromISO, toISO } = dayRangeISO(from, to);
       const rows = await fetchAll<SaleRow>(() => {
@@ -153,6 +159,7 @@ function SalesHistoryPage() {
           .order("created_at", { ascending: false });
         if (q.trim()) query = query.ilike("invoice_no", `%${q.trim()}%`);
         if (status !== "all") query = query.eq("status", status as any);
+        if (bizOn) query = (query as any).eq("project", biz);
         return query as any;
       });
       return rows;
@@ -162,34 +169,36 @@ function SalesHistoryPage() {
   // Collection totals are cash-basis: each payment belongs to the Dhaka day on
   // which it was actually received, regardless of when its invoice was raised.
   const { data: rangePayments = [] } = useQuery({
-    queryKey: ["sales-history-payments", from, to],
+    queryKey: ["sales-history-payments", from, to, biz],
     queryFn: async () => {
       const { fromISO, toISO } = dayRangeISO(from, to);
-      return await fetchAll<RangePayment>(() =>
+      const rows = await fetchAll<RangePayment & { sales?: { project?: string } | null }>(() =>
         supabase
           .from("payments")
-          .select("id,sale_id,method,amount,received_at")
+          .select(bizOn ? "id,sale_id,method,amount,received_at, sales(project)" : "id,sale_id,method,amount,received_at")
           .gte("received_at", fromISO)
           .lte("received_at", toISO)
           .order("received_at", { ascending: false }) as any,
       );
+      return bizOn ? rows.filter((p) => !!p.sale_id && (p.sales?.project ?? "pcv") === biz) : rows;
     },
   });
 
   // Refunds/cancellations processed in the same window — Net Sales must subtract
   // them exactly like Reports does (cancelled invoice = full-value reversal).
   const { data: rangeReturns = [] } = useQuery({
-    queryKey: ["sales-history-returns", from, to],
+    queryKey: ["sales-history-returns", from, to, biz],
     queryFn: async () => {
       const { fromISO, toISO } = dayRangeISO(from, to);
-      return await fetchAll<any>(() =>
+      const rows = await fetchAll<any>(() =>
         supabase
           .from("sale_returns")
-          .select("sale_id,refund_amount,created_at, sales(id,status,total,subtotal,discount,created_at)")
+          .select(`sale_id,refund_amount,created_at, sales(id,status,total,subtotal,discount,created_at${bizOn ? ",project" : ""})`)
           .gte("created_at", fromISO)
           .lte("created_at", toISO)
           .order("created_at") as any,
       );
+      return bizOn ? rows.filter((r: any) => (r.sales?.project ?? "pcv") === biz) : rows;
     },
   });
 
@@ -428,8 +437,15 @@ function SalesHistoryPage() {
       <Card className="mb-4">
         <CardContent className="space-y-3 p-3 sm:p-4">
           <MobileFilterBar
-            search={{ value: q, onChange: setQ, placeholder: "Search invoice no (INV-…)" }}
+            search={{ value: q, onChange: setQ, placeholder: "Search invoice no (INV-… / SS-…)" }}
             groups={[
+              ...(hasBizQ.data ? [{
+                key: "business",
+                label: "Business",
+                value: biz,
+                onChange: (v: string) => setBiz(v === "pcv" || v === "ss" ? v : "all"),
+                options: [{ value: "all", label: "Both businesses" }, ...PROJECTS.map((p) => ({ value: p.key, label: p.label }))],
+              }] : []),
               {
                 key: "status",
                 label: "Status",
@@ -456,7 +472,7 @@ function SalesHistoryPage() {
                 ],
               },
             ]}
-            onClear={() => { setQ(""); setFrom(startOfMonth()); setTo(today()); setStatus("all"); setMethod("all"); }}
+            onClear={() => { setQ(""); setFrom(startOfMonth()); setTo(today()); setStatus("all"); setMethod("all"); setBiz("all"); }}
           />
           <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-3">
             <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-11 min-w-0 rounded-xl sm:h-9 sm:w-40" />

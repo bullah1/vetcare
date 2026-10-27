@@ -8,11 +8,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { BusinessPicker } from "@/components/BusinessPicker";
+import { asProject, projectLabel, type Project } from "@/lib/projects";
 
 const METHODS = ["cash", "bkash", "nagad", "rocket", "card", "bank"] as const;
 type Method = (typeof METHODS)[number];
 
-export type OpenInvoice = { id: string; invoice_no: string; due: number; created_at: string };
+export type OpenInvoice = { id: string; invoice_no: string; due: number; created_at: string; project?: Project | null };
 
 const fmt = (n: number) => `৳ ${Number(n || 0).toFixed(2)}`;
 
@@ -32,14 +34,17 @@ export function CustomerPaymentDialog({
   const [amount, setAmount] = useState<number | "">("");
   const [method, setMethod] = useState<Method>("cash");
   const [reference, setReference] = useState("");
+  // Which business's due this money clears: oldest first (any business) or one business.
+  const [target, setTarget] = useState<Project | "all">("all");
+  const twoBusinesses = new Set(invoices.filter((i) => Number(i.due) > 0.004).map((i) => asProject(i.project))).size > 1;
 
   // oldest invoice first so the earliest due clears first
   const openInvoices = useMemo(
     () =>
       [...invoices]
-        .filter((i) => Number(i.due) > 0.004)
+        .filter((i) => Number(i.due) > 0.004 && (target === "all" || asProject(i.project) === target))
         .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
-    [invoices],
+    [invoices, target],
   );
 
   const totalDue = openInvoices.reduce((a, i) => a + Number(i.due), 0);
@@ -50,6 +55,7 @@ export function CustomerPaymentDialog({
   useEffect(() => {
     if (!open) {
       prefilled.current = false;
+      setTarget("all");
       return;
     }
     if (prefilled.current) return;
@@ -138,8 +144,16 @@ export function CustomerPaymentDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          {twoBusinesses && (
+            <div className="space-y-1.5">
+              <Label>Clear due of</Label>
+              <BusinessPicker<Project | "all"> value={target} label="Clear due of"
+                onChange={(v) => { setTarget(v); prefilled.current = false; }}
+                extra={{ value: "all", label: "Oldest first" }} />
+            </div>
+          )}
           <div className="rounded-md border p-3 text-sm flex justify-between font-medium">
-            <span className="text-muted-foreground">Total outstanding due</span>
+            <span className="text-muted-foreground">{target === "all" ? "Total outstanding due" : `${projectLabel(target)} due`}</span>
             <span className={`tabular-nums ${totalDue > 0 ? "text-destructive" : ""}`}>{fmt(totalDue)}</span>
           </div>
 
@@ -177,7 +191,7 @@ export function CustomerPaymentDialog({
             ) : (
               allocation.rows.map((r) => (
                 <div key={r.invoice.id} className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">{r.invoice.invoice_no}</span>
+                  <span className="text-muted-foreground">{r.invoice.invoice_no}{twoBusinesses ? ` · ${projectLabel(r.invoice.project)}` : ""}</span>
                   <span className="tabular-nums">
                     {fmt(r.amount)} <span className="text-muted-foreground">/ {fmt(Number(r.invoice.due))}</span>
                   </span>

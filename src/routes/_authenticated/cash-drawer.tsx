@@ -1,3 +1,5 @@
+import { MoneyByBusiness, loadMoneyByBusiness } from "@/components/MoneyByBusiness";
+import { hasProjects } from "@/lib/business-report";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -198,6 +200,13 @@ function CashDrawerPage() {
       )}
 
       {viewed && <ShiftSummaryCards s={viewed} />}
+      {viewed && (
+        <MoneyByBusiness
+          title="This shift by business"
+          fromISO={viewed.opened_at}
+          toISO={viewed.closed_at ?? "2999-12-31T00:00:00Z"}
+        />
+      )}
       {effectiveShiftId && <MethodSummary shiftId={effectiveShiftId} />}
       {effectiveShiftId && <MovementsList shiftId={effectiveShiftId} />}
 
@@ -879,6 +888,12 @@ async function printShiftData(s: Summary | null) {
     closedBy = user.data?.user?.email ?? "";
   } catch { /* report still prints without extras */ }
 
+  // Same shift split by business (only after the Projects SQL).
+  let byBusiness: Awaited<ReturnType<typeof loadMoneyByBusiness>> | null = null;
+  try {
+    if (await hasProjects()) byBusiness = await loadMoneyByBusiness(s.opened_at, s.closed_at ?? "2999-12-31T00:00:00Z");
+  } catch { /* optional */ }
+
 
   const ORDER = ["cash", "bkash", "nagad", "card", "rocket", "bank"] as const;
   const shown = ORDER.filter((k) => k !== "bank" || (collectedByMethod["bank"] ?? 0) !== 0);
@@ -979,6 +994,13 @@ async function printShiftData(s: Summary | null) {
     ${prevRefund ? row("Prev. Invoice Refund", sMoney(-Math.abs(prevRefund)), "neg") : ""}
     ${row("Total (= Today Sales)", sMoney(netSales), "total")}
   </div>
+
+  ${byBusiness ? `<div class="sec">
+    <div class="sec-t">By Business (all methods)</div>
+    ${byBusiness.rows.map((r) => row(r.label, sMoney(r.sign * (r.v.cash + r.v.mobile + r.v.bank)), r.sign < 0 ? "neg" : undefined)).join("")}
+    ${row("Pet Care Vet net", sMoney(byBusiness.inBy.pcv))}
+    ${row("Sasthya Seba net", sMoney(byBusiness.inBy.ss))}
+  </div>` : ""}
 
 
   <div class="sec">

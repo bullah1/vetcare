@@ -1,5 +1,6 @@
 // Excel workbook and printable (PDF) Monthly Business Report. Both read the
 // same computed numbers as the screen, so the three always match.
+import { brandFor } from "@/lib/projects";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
 import { getClinic } from "@/lib/clinic-settings";
@@ -72,7 +73,7 @@ function summaryRows(c: Computed, p: Computed | null, s: Snap | null) {
   return rows;
 }
 
-export function exportBusinessExcel(c: Computed, p: Computed | null, s: Snap | null) {
+export function exportBusinessExcel(c: Computed, p: Computed | null, s: Snap | null, business?: string | null) {
   const wb = XLSX.utils.book_new();
   const add = (name: string, rows: Record<string, unknown>[]) => {
     const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Note: "No data" }]);
@@ -100,12 +101,13 @@ export function exportBusinessExcel(c: Computed, p: Computed | null, s: Snap | n
     add("Supplier payable", s.supplierRows.map((x: any) => ({ Supplier: x.name, Phone: x.phone ?? "", Payable: r(x.balance_due) })));
   }
   add("Notes", PROFIT_NOTES.map((t) => ({ Note: t })));
-  XLSX.writeFile(wb, `business-report_${c.period.from}_to_${c.period.to}.xlsx`);
+  XLSX.writeFile(wb, `business-report${business ? `-${business}` : ""}_${c.period.from}_to_${c.period.to}.xlsx`);
 }
 
 /** Printable report — the browser's "Save as PDF" makes the PDF. */
-export function printBusinessReport(c: Computed, p: Computed | null, s: Snap | null, insights: { tone: string; text: string }[]) {
-  const CLINIC = getClinic();
+export function printBusinessReport(c: Computed, p: Computed | null, s: Snap | null, insights: { tone: string; text: string }[], business?: string | null) {
+  // One business → its own header; both → the clinic profile.
+  const CLINIC = business ? brandFor(business) : getClinic();
   const cmp = (cur: number, prev?: number) => {
     if (prev == null) return "";
     const ch = changePct(cur, prev);

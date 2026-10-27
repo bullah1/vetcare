@@ -28,6 +28,7 @@ export const MODULES: ModuleDef[] = [
   { key: "deliveries", label: "Deliveries", url: "/deliveries", group: "Shop" },
   { key: "delivery_report", label: "Delivery Report", url: "/delivery-report", group: "Shop" },
 
+  { key: "analysis", label: "Analysis", url: "/analysis", group: "Business" },
   { key: "accounts", label: "Accounts", url: "/accounts", group: "Business" },
   { key: "business_report", label: "Business Report", url: "/business-report", group: "Business" },
   { key: "product_sales", label: "Product Sales", url: "/product-sales", group: "Business" },
@@ -49,7 +50,7 @@ export const PERMISSION_KEYS = [...MODULES.map((m) => m.key), ...ACTION_PERMISSI
 export const ADMIN_ONLY_KEYS = ["staff"];
 
 /** A permission that is also granted by another one (older users keep access). */
-export const IMPLIED_BY: Record<string, string> = { delivery_report: "deliveries", clinic_bill: "appointments", product_sales: "reports" };
+export const IMPLIED_BY: Record<string, string> = { delivery_report: "deliveries", clinic_bill: "appointments", product_sales: "reports", analysis: "business_report" };
 
 /** Map a pathname to the permission that guards it. */
 export function permissionForPath(pathname: string): string | null {

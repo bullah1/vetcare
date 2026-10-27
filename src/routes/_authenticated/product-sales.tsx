@@ -12,7 +12,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { DataTable, type Column } from "@/components/report/DataTable";
-import { computeProductSales, EMPTY_FILTERS, loadProductSales, METHOD_LABEL, type Filters } from "@/lib/product-sales";
+import { computeProductSales, EMPTY_FILTERS, loadProductSales, METHOD_LABEL, productSalesForBusiness, type Filters } from "@/lib/product-sales";
+import { hasProjects } from "@/lib/business-report";
+import { PROJECTS, type Project } from "@/lib/projects";
 import { exportCsv, exportExcel, printSheet, SHEET_TITLES, type SheetKey } from "@/lib/product-sales-export";
 import { monthStartDhaka, todayDhaka } from "@/lib/sales-ledger";
 import { shiftDay } from "@/lib/sales-summary";
@@ -60,7 +62,9 @@ function ProductSalesPage() {
     enabled: !!from && !!to && from <= to,
     staleTime: 30_000,
   });
-  const v = useMemo(() => (data ? computeProductSales(data, f) : null), [data, f]);
+  const hasBizQ = useQuery({ queryKey: ["has-projects"], queryFn: hasProjects, staleTime: Infinity });
+  const [biz, setBiz] = useState<"all" | Project>("all");
+  const v = useMemo(() => (data ? computeProductSales(productSalesForBusiness(data, biz), f) : null), [data, f, biz]);
   const set = (patch: Partial<Filters>) => setF((x) => ({ ...x, ...patch }));
   const filtersOn = JSON.stringify(f) !== JSON.stringify(EMPTY_FILTERS);
   const filterNote = [
@@ -106,6 +110,18 @@ function ProductSalesPage() {
       {/* Filters */}
       <Card>
         <CardContent className="grid gap-3 p-3 sm:grid-cols-2 sm:p-3 lg:grid-cols-4">
+          {hasBizQ.data && (
+            <div className="space-y-1">
+              <Label className="text-xs">Business</Label>
+              <Select value={biz} onValueChange={(x) => setBiz(x === "pcv" || x === "ss" ? x : "all")}>
+                <SelectTrigger className="h-9" aria-label="Business"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Both businesses</SelectItem>
+                  {PROJECTS.map((p) => <SelectItem key={p.key} value={p.key}>{p.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <div className="space-y-1">
             <Label className="text-xs">Dates</Label>
             <Select value={preset} onValueChange={(x) => setPreset(x as Preset)}>

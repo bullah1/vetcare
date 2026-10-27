@@ -60,7 +60,7 @@ type Row = {
   line: number;
   name: string; sku: string | null; barcode: string | null; category: string; unit: string | null;
   /** Category cell as typed; legacyOk = it matched one of the older fixed categories. */
-  catText: string; legacyOk: boolean; categoryId?: string | null; catLabel?: string;
+  catText: string; legacyOk: boolean; categoryId?: string | null; catLabel?: string; project?: Project;
   purchase_price: number; selling_price: number; wholesale_price: number | null; min_selling_price: number | null;
   tax_percent: number; stock_quantity: number; low_stock_threshold: number; description: string | null;
   is_active: boolean;
@@ -162,15 +162,19 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
       // Category: a category name (any project) or an older word (food, medicine…)
       // in the project chosen above.
       let categoryId: string | null = null, catLabel = r.category.replace(/_/g, " "), category = r.category;
-      if (hasCats) {
+      let rowProject: Project | undefined;
+      if (hasCats && !r.catText) {
+        // Empty category: just the business chosen above, no category.
+        rowProject = project; catLabel = "—";
+      } else if (hasCats) {
         const t = r.catText.toLowerCase();
         const named = t ? (cats.find((c) => c.project === project && c.name.toLowerCase() === t) ?? cats.find((c) => c.name.toLowerCase() === t)) : undefined;
         const inProj = cats.filter((c) => c.project === project && c.is_active);
         const pick = named ?? (r.legacyOk ? (inProj.find((c) => c.legacy_category === r.category) ?? inProj[0]) : undefined);
-        if (pick) { categoryId = pick.id; category = pick.legacy_category; catLabel = `${pick.name}${pick.project === "ss" ? " (SS)" : ""}`; }
+        if (pick) { categoryId = pick.id; rowProject = pick.project; category = pick.legacy_category; catLabel = `${pick.name}${pick.project === "ss" ? " (SS)" : ""}`; }
         else errors.push(`Unknown category "${r.catText}"`);
       } else if (!r.legacyOk) errors.push(`Unknown category "${r.catText}"`);
-      return { ...r, category, categoryId, catLabel, errors, matchId: m?.id ?? null, matchBy: by };
+      return { ...r, category, categoryId, catLabel, project: rowProject, errors, matchId: m?.id ?? null, matchBy: by };
     });
   }, [raw, index, hasCats, cats, project]);
 
@@ -265,7 +269,7 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
     const keepCat = (r: Row) => !!r.matchId && !r.catText;
     const base = (r: Row) => ({
       name: r.name, sku: r.sku, barcode: r.barcode, unit: r.unit,
-      ...(keepCat(r) ? {} : { category: r.category, ...(r.categoryId ? { category_id: r.categoryId } : {}) }),
+      ...(keepCat(r) ? {} : { category: r.category, ...(r.project ? { project: r.project, category_id: r.categoryId ?? null } : {}) }),
       purchase_price: r.purchase_price, selling_price: r.selling_price, tax_percent: r.tax_percent,
       low_stock_threshold: r.low_stock_threshold, ...(r.description ? { description: r.description } : {}),
     });
@@ -373,7 +377,7 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
             )}
             {hasCats && (
               <div className="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-sm">
-                <span>Upload to project<span className="block text-xs text-muted-foreground">Used when the Category cell is empty or a general word (medicine, food…). A category name from your list always wins.</span></span>
+                <span>Upload to project<span className="block text-xs text-muted-foreground">Products go to this business. A category name from your list decides by itself; the Category column can be left empty.</span></span>
                 <div className="ml-auto inline-flex rounded-md border p-0.5">
                   {PROJECTS.map((p) => (
                     <button key={p.key} type="button" disabled={busy} onClick={() => setProject(p.key)}

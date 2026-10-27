@@ -24,6 +24,24 @@ import { fetchAll, fetchAllIn } from "@/lib/fetch-all";
 import { dayRangeISO, grossOf } from "@/lib/sales-ledger";
 import { dhakaDayKey, shiftDay } from "@/lib/sales-summary";
 import { deliveryMoney, loadShipments, type Shipment } from "@/lib/shipments";
+import type { Project } from "@/lib/projects";
+
+// ---------------------------------------------------------------------------
+// Two businesses (Pet Care Vet / Sasthya Seba). The columns come with the
+// Projects SQL; before it everything is Pet Care Vet.
+let projectsProbe: Promise<boolean> | null = null;
+export function hasProjects(): Promise<boolean> {
+  projectsProbe ??= (async () => {
+    const { error } = await (supabase as any).from("sales").select("project").limit(1);
+    return !error;
+  })();
+  return projectsProbe;
+}
+async function loadCategoryNames(): Promise<Map<string, string>> {
+  const { data, error } = await (supabase as any).from("product_categories").select("id,name");
+  if (error) return new Map();
+  return new Map((data ?? []).map((c: any) => [c.id, c.name]));
+}
 
 const db = supabase as any;
 const n = (v: unknown) => Number(v) || 0;
@@ -76,18 +94,21 @@ export type PeriodData = Awaited<ReturnType<typeof loadPeriod>>;
 
 export async function loadPeriod({ from, to }: Period) {
   const { fromISO, toISO } = dayRangeISO(from, to);
+  const P = await hasProjects();
+  const pj = P ? ",project" : "";
+  const catNames = P ? await loadCategoryNames() : new Map<string, string>();
   const [sales, items, returns, payments, expenses, purchases, purchaseReturns, supplierPayments, appointments, adjustments, shipments, visits, prescriptions, flows] =
     await Promise.all([
-      fetchAll<any>(() => db.from("sales").select("id,invoice_no,created_at,subtotal,discount,tax,total,paid,due,status,owner_id, owner:pet_owners(full_name,phone)").gte("created_at", fromISO).lte("created_at", toISO).order("created_at").order("id")),
-      fetchAll<any>(() => db.from("sale_items").select("id,sale_id,product_id,name,quantity,returned_quantity,line_total,cost_price, products(purchase_price,category), sales!inner(created_at)").gte("sales.created_at", fromISO).lte("sales.created_at", toISO).order("id")),
-      fetchAll<any>(() => db.from("sale_returns").select("id,sale_id,return_no,reason,refund_method,refund_amount,refund_paid,due_reduction,restock,return_type,created_at, sales(invoice_no,status,total,subtotal,discount,created_at), sale_return_items(product_id,name,quantity,line_total, sale_items(cost_price, products(purchase_price)))").gte("created_at", fromISO).lte("created_at", toISO).order("created_at").order("id")),
-      fetchAll<any>(() => db.from("payments").select("id,sale_id,method,amount,return_id,received_at").gte("received_at", fromISO).lte("received_at", toISO).order("received_at").order("id")),
+      fetchAll<any>(() => db.from("sales").select(`id,invoice_no,created_at,subtotal,discount,tax,total,paid,due,status,owner_id${pj}, owner:pet_owners(full_name,phone)`).gte("created_at", fromISO).lte("created_at", toISO).order("created_at").order("id")),
+      fetchAll<any>(() => db.from("sale_items").select(`id,sale_id,product_id,name,quantity,returned_quantity,line_total,cost_price, products(purchase_price,category${P ? ",category_id" : ""}), sales!inner(created_at${pj})`).gte("sales.created_at", fromISO).lte("sales.created_at", toISO).order("id")),
+      fetchAll<any>(() => db.from("sale_returns").select(`id,sale_id,return_no,reason,refund_method,refund_amount,refund_paid,due_reduction,restock,return_type,created_at, sales(invoice_no,status,total,subtotal,discount,created_at${pj}), sale_return_items(product_id,name,quantity,line_total, sale_items(cost_price, products(purchase_price)))`).gte("created_at", fromISO).lte("created_at", toISO).order("created_at").order("id")),
+      fetchAll<any>(() => db.from("payments").select(`id,sale_id,method,amount,return_id,received_at${P ? ", sales(project,created_at)" : ""}`).gte("received_at", fromISO).lte("received_at", toISO).order("received_at").order("id")),
       fetchAll<any>(() => db.from("expenses").select("*").gte("expense_date", from).lte("expense_date", to).order("expense_date").order("id")),
       fetchAll<any>(() => db.from("purchase_invoices").select("id,invoice_no,supplier_id,invoice_date,subtotal,discount,total,paid,due,status, suppliers(name)").gte("invoice_date", from).lte("invoice_date", to).order("invoice_date").order("id")),
       fetchAll<any>(() => db.from("purchase_returns").select("id,return_no,refund_amount,created_at").gte("created_at", fromISO).lte("created_at", toISO).order("id")),
       fetchAll<any>(() => db.from("supplier_payments").select("id,supplier_id,amount,method,paid_at, suppliers(name)").gte("paid_at", from).lte("paid_at", to).order("id")),
       fetchAll<any>(() => db.from("appointments").select("id,doctor_id,fee,paid,discount,status,sale_id,scheduled_at, doctors(full_name)").gte("scheduled_at", fromISO).lte("scheduled_at", toISO).order("scheduled_at").order("id")),
-      fetchAll<any>(() => db.from("stock_adjustments").select("id,product_id,quantity_change,reason,created_at, products(name,purchase_price,category)").gte("created_at", fromISO).lte("created_at", toISO).order("id")),
+      fetchAll<any>(() => db.from("stock_adjustments").select(`id,product_id,quantity_change,reason,created_at, products(name,purchase_price,category${pj})`).gte("created_at", fromISO).lte("created_at", toISO).order("id")),
       loadShipments(from, to),
       db.from("medical_records").select("id", { count: "exact", head: true }).gte("visit_date", fromISO).lte("visit_date", toISO),
       db.from("prescriptions").select("id", { count: "exact", head: true }).gte("issued_at", fromISO).lte("issued_at", toISO),
@@ -112,6 +133,7 @@ export async function loadPeriod({ from, to }: Period) {
 
   return {
     period: { from, to },
+    catNames,
     sales, items, returns, payments, expenses, purchases, purchaseReturns, supplierPayments, appointments, adjustments, shipments,
     visits: visits.count ?? 0,
     prescriptions: prescriptions.count ?? 0,
@@ -125,17 +147,21 @@ export async function loadPeriod({ from, to }: Period) {
 /** Today's position — stock, receivables, payables, balances. Not tied to a period. */
 export async function loadSnapshot() {
   const today = dhakaDayKey(new Date());
+  const P = await hasProjects();
+  const pj = P ? ",project" : "";
+  const catNames = P ? await loadCategoryNames() : new Map<string, string>();
   const soon = shiftDay(today, 30);
   const [products, batches, suppliers, dueSales, balances, drawer] = await Promise.all([
-    fetchAll<any>(() => db.from("products").select("id,name,sku,category,unit,stock_quantity,purchase_price,selling_price,low_stock_threshold,is_active").order("name").order("id")),
-    fetchAll<any>(() => db.from("stock_batches").select("id,product_id,batch_no,quantity,purchase_price,expiry_date, products(name,stock_quantity,purchase_price)").not("expiry_date", "is", null).lte("expiry_date", soon).gt("quantity", 0).order("expiry_date").order("id")),
+    fetchAll<any>(() => db.from("products").select(`id,name,sku,category,unit,stock_quantity,purchase_price,selling_price,low_stock_threshold,is_active${P ? ",project,category_id" : ""}`).order("name").order("id")),
+    fetchAll<any>(() => db.from("stock_batches").select(`id,product_id,batch_no,quantity,purchase_price,expiry_date, products(name,stock_quantity,purchase_price${pj})`).not("expiry_date", "is", null).lte("expiry_date", soon).gt("quantity", 0).order("expiry_date").order("id")),
     fetchAll<any>(() => db.from("suppliers").select("id,name,phone,balance_due").order("name").order("id")),
-    fetchAll<any>(() => db.from("sales").select("id,invoice_no,created_at,total,paid,due,status, owner:pet_owners(full_name,phone)").gt("due", 0.004).in("status", ["completed", "partial_refund"]).order("created_at").order("id")),
+    fetchAll<any>(() => db.from("sales").select(`id,invoice_no,created_at,total,paid,due,status${pj}, owner:pet_owners(full_name,phone)`).gt("due", 0.004).in("status", ["completed", "partial_refund"]).order("created_at").order("id")),
     db.rpc("account_balances", { _from: null, _to: null }),
     db.rpc("cash_shift_summary", {}),
   ]);
   return {
     today,
+    catNames,
     products,
     expiring: batches,
     suppliers,
@@ -228,7 +254,7 @@ export function computePeriod(d: PeriodData) {
     const factor = sub > 0 ? Math.max(0, Math.min(1, grossOf(s) / sub)) : 1; // spread invoice discount
     const rev = q > 0 ? n(it.line_total) * (netQ / q) * factor : 0;
     const key = it.product_id ?? `svc:${it.name}`;
-    const p = products.get(key) ?? { key, name: it.name, category: it.product_id ? catLabel(it.products?.category) : isClinic(it.sale_id) ? "Clinic service" : "Service", qty: 0, revenue: 0, cost: 0 };
+    const p = products.get(key) ?? { key, name: it.name, category: it.product_id ? ((it.products?.category_id && d.catNames.get(it.products.category_id)) || catLabel(it.products?.category)) : isClinic(it.sale_id) ? "Clinic service" : "Service", qty: 0, revenue: 0, cost: 0 };
     p.qty += netQ;
     p.revenue += rev;
     p.cost += netQ * unitCost(it);
@@ -415,7 +441,8 @@ export function computeSnapshot(s: Snapshot) {
     const thr = n(p.low_stock_threshold);
     if (q <= 0) { out += 1; lowRows.push({ ...p, state: q < 0 ? "Negative" : "Out of stock" }); }
     else if (thr > 0 && q <= thr) { low += 1; lowRows.push({ ...p, state: "Low" }); }
-    const c = catMap.get(catLabel(p.category)) ?? { category: catLabel(p.category), products: 0, units: 0, value: 0, retail: 0 };
+    const cname = (p.category_id && s.catNames.get(p.category_id)) || catLabel(p.category);
+    const c = catMap.get(cname) ?? { category: cname, products: 0, units: 0, value: 0, retail: 0 };
     c.products += 1; c.units += qPos; c.value += v; c.retail += qPos * n(p.selling_price);
     catMap.set(c.category, c);
   }
@@ -482,3 +509,77 @@ export function buildInsights(c: Computed, p: Computed | null, snap: ReturnType<
 }
 
 export { r2 };
+
+// ---------------------------------------------------------------------------
+// Per business (Pet Care Vet / Sasthya Seba)
+//  - A bill belongs to one business; its items, returns, payments, delivery and
+//    due follow the bill.
+//  - Expenses with a business are that business's; shared ones (no business)
+//    are split by each business's net sales in the period.
+//  - Clinic (appointments, visits) is Pet Care Vet. Purchases and supplier
+//    payments are stock, not profit, and are only shown for both together.
+
+const projOf = (p: unknown): Project => (p === "ss" ? "ss" : "pcv");
+
+/** One business's part of a period. Shared expenses come in at `sharedShare` (0–1) of their amount. */
+export function periodForProject(d: PeriodData, project: Project, sharedShare: number): PeriodData {
+  const saleProject = new Map<string, Project>();
+  for (const s of d.sales) saleProject.set(s.id, projOf(s.project));
+  for (const r of d.returns) if (r.sales) saleProject.set(r.sale_id, projOf(r.sales.project));
+  for (const p of d.payments) if (p.sale_id && p.sales) saleProject.set(p.sale_id, projOf(p.sales.project));
+  const of = (saleId: string | null | undefined, invoiceNo?: string | null): Project =>
+    (saleId && saleProject.get(saleId)) || (String(invoiceNo ?? "").startsWith("SS-") ? "ss" : "pcv");
+  const mine = (x: Project) => x === project;
+  return {
+    ...d,
+    sales: d.sales.filter((s: any) => mine(projOf(s.project))),
+    items: d.items.filter((it: any) => mine(projOf(it.sales?.project))),
+    returns: d.returns.filter((r: any) => mine(projOf(r.sales?.project))),
+    payments: d.payments.filter((p: any) => !!p.sale_id && mine(of(p.sale_id))),
+    expenses: d.expenses.flatMap((e: any) =>
+      e.project
+        ? (mine(projOf(e.project)) ? [e] : [])
+        : sharedShare > 0 ? [{ ...e, amount: r2(n(e.amount) * sharedShare), shared: true }] : []),
+    purchases: [],
+    purchaseReturns: [],
+    supplierPayments: [],
+    appointments: project === "pcv" ? d.appointments : [],
+    adjustments: d.adjustments.filter((a: any) => mine(projOf(a.products?.project))),
+    shipments: d.shipments.filter((s) => mine(of(s.saleId, s.invoiceNo))),
+    visits: project === "pcv" ? d.visits : 0,
+    prescriptions: project === "pcv" ? d.prescriptions : 0,
+    flows: [],
+  };
+}
+
+export type ByProject = ReturnType<typeof computeByProject>;
+
+/** Both businesses and the total, with shared expenses split by net sales. */
+export function computeByProject(d: PeriodData) {
+  const all = computePeriod(d);
+  const pcv0 = computePeriod(periodForProject(d, "pcv", 0));
+  const ss0 = computePeriod(periodForProject(d, "ss", 0));
+  const a = Math.max(0, pcv0.sales.netSales), b = Math.max(0, ss0.sales.netSales);
+  const pcvShare = a + b > 0 ? a / (a + b) : 0.5;
+  const sharedRows = d.expenses.filter((e: any) => !e.project && !isPurchaseExpense(e));
+  const sharedTotal = sharedRows.reduce((t: number, e: any) => t + n(e.amount), 0);
+  return {
+    all,
+    pcv: sharedTotal > 0 ? computePeriod(periodForProject(d, "pcv", pcvShare)) : pcv0,
+    ss: sharedTotal > 0 ? computePeriod(periodForProject(d, "ss", 1 - pcvShare)) : ss0,
+    shared: { total: sharedTotal, pcvShare, ssShare: 1 - pcvShare, rows: sharedRows },
+  };
+}
+
+/** Today's stock / due position of one business. */
+export function snapshotForProject(s: Snapshot, project: Project): Snapshot {
+  return {
+    ...s,
+    products: s.products.filter((p: any) => projOf(p.project) === project),
+    expiring: s.expiring.filter((b: any) => projOf(b.products?.project) === project),
+    dueSales: s.dueSales.filter((x: any) => projOf(x.project) === project),
+    suppliers: [],
+    balances: [],
+    drawer: null,
+  };
+}

@@ -23,10 +23,14 @@ import {
   loadPeriod,
   loadSnapshot,
   previousPeriod,
+  computeByProject,
+  hasProjects,
+  snapshotForProject,
   type Computed,
 } from "@/lib/business-report";
 import { PROFIT_NOTES, exportBusinessExcel, printBusinessReport, profitLines } from "@/lib/business-report-export";
 import type { Shipment } from "@/lib/shipments";
+import { PROJECTS, type Project } from "@/lib/projects";
 
 export const Route = createFileRoute("/_authenticated/business-report")({
   head: () => ({
@@ -130,9 +134,13 @@ function BusinessReportPage() {
   const prevQ = useQuery({ queryKey: ["business-report", prev.from, prev.to], queryFn: () => loadPeriod(prev), enabled: compare, staleTime: 5 * 60_000 });
   const snapQ = useQuery({ queryKey: ["business-snapshot"], queryFn: loadSnapshot, staleTime: 60_000 });
 
-  const c = useMemo(() => (curQ.data ? computePeriod(curQ.data) : null), [curQ.data]);
-  const p = useMemo(() => (compare && prevQ.data ? computePeriod(prevQ.data) : null), [compare, prevQ.data]);
-  const s = useMemo(() => (snapQ.data ? computeSnapshot(snapQ.data) : null), [snapQ.data]);
+  // Business: both together, or one (shared expenses split by sales).
+  const [biz, setBiz] = useState<"all" | Project>("all");
+  const hasSsQ = useQuery({ queryKey: ["has-projects"], queryFn: hasProjects, staleTime: Infinity });
+  const pickBiz = (d: Parameters<typeof computePeriod>[0]) => (biz === "all" ? computePeriod(d) : computeByProject(d)[biz]);
+  const c = useMemo(() => (curQ.data ? pickBiz(curQ.data) : null), [curQ.data, biz]);
+  const p = useMemo(() => (compare && prevQ.data ? pickBiz(prevQ.data) : null), [compare, prevQ.data, biz]);
+  const s = useMemo(() => (snapQ.data ? computeSnapshot(biz === "all" ? snapQ.data : snapshotForProject(snapQ.data, biz)) : null), [snapQ.data, biz]);
   const insights = useMemo(() => (c ? buildInsights(c, p, s) : []), [c, p, s]);
 
   const choose = (k: Preset) => { setPreset(k); if (k !== "custom") setRange(rangeFor(k)); };
@@ -148,10 +156,10 @@ function BusinessReportPage() {
         icon={LineChart}
         actions={
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" disabled={!c} onClick={() => c && printBusinessReport(c, p, s, insights)}>
+            <Button variant="outline" disabled={!c} onClick={() => c && printBusinessReport(c, p, s, insights, biz === "all" ? null : biz)}>
               <Printer className="h-4 w-4" /> Print / PDF
             </Button>
-            <Button variant="outline" disabled={!c} onClick={() => c && exportBusinessExcel(c, p, s)}>
+            <Button variant="outline" disabled={!c} onClick={() => c && exportBusinessExcel(c, p, s, biz === "all" ? null : biz)}>
               <Download className="h-4 w-4" /> Excel
             </Button>
           </div>
@@ -160,6 +168,13 @@ function BusinessReportPage() {
 
       <Card className="mb-4">
         <CardContent className="flex flex-wrap items-center gap-2 p-3 sm:p-4">
+          {hasSsQ.data && (
+            <div className="flex w-full flex-wrap gap-2 border-b pb-2">
+              {([["all", "Both businesses"], ...PROJECTS.map((x) => [x.key, x.label])] as ["all" | Project, string][]).map(([k, l]) => (
+                <button key={k} type="button" className={chip(biz === k)} onClick={() => setBiz(k)}>{l}</button>
+              ))}
+            </div>
+          )}
           {([["today", "Daily"], ["week", "Weekly"], ["month", "Monthly"], ["lastMonth", "Last month"], ["year", "Yearly"], ["custom", "Custom"]] as [Preset, string][]).map(([k, l]) => (
             <button key={k} type="button" className={chip(preset === k)} onClick={() => choose(k)}>{l}</button>
           ))}

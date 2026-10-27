@@ -3,6 +3,8 @@
 //  - Sales lines: invoices made in the period (invoice date).
 //  - Collection: payments received in the period (payment date), spread over the
 //    lines of the invoice they belong to.
+import { hasProjects } from "@/lib/business-report";
+import type { Project } from "@/lib/projects";
 import { supabase } from "@/integrations/supabase/client";
 import { fetchAll, fetchAllIn } from "@/lib/fetch-all";
 import { withSchemaFallback } from "@/lib/schema-fallback";
@@ -20,7 +22,7 @@ export const METHOD_LABEL: Record<string, string> = {
 type SaleRow = {
   id: string; invoice_no: string; created_at: string; status: string; source?: string | null;
   subtotal: number; discount: number; tax: number; total: number; paid: number; due: number;
-  cashier_id: string | null; owner_id: string | null;
+  cashier_id: string | null; owner_id: string | null; project?: string | null;
   owner: { full_name: string; phone: string | null } | null;
 };
 type ItemRow = {
@@ -53,7 +55,8 @@ async function itemsFor(saleIds: string[]) {
 
 export async function loadProductSales(from: string, to: string) {
   const { fromISO, toISO } = dayRangeISO(from, to);
-  const saleCols = "id,invoice_no,created_at,status,subtotal,discount,tax,total,paid,due,cashier_id,owner_id, owner:pet_owners(full_name,phone)";
+  const P = await hasProjects();
+  const saleCols = `id,invoice_no,created_at,status,subtotal,discount,tax,total,paid,due,cashier_id,owner_id${P ? ",project" : ""}, owner:pet_owners(full_name,phone)`;
   const [sales, periodPays] = await Promise.all([
     fetchAll<SaleRow>(() => db.from("sales").select(saleCols).gte("created_at", fromISO).lte("created_at", toISO).order("created_at").order("id")),
     fetchAll<PayRow>(() => db.from("payments").select("id,sale_id,method,amount,received_at,return_id").gte("received_at", fromISO).lte("received_at", toISO).order("received_at").order("id")),
@@ -80,6 +83,23 @@ export type Filters = {
 export const EMPTY_FILTERS: Filters = { product: "", category: "all", invoice: "", customer: "", employee: "all", method: "all" };
 
 const CANCELLED = new Set(["void", "refunded"]);
+
+/** Only one business's bills (and their items and payments). */
+export function productSalesForBusiness(d: ProductSalesData, business: Project | "all"): ProductSalesData {
+  if (business === "all") return d;
+  const mine = (s: SaleRow) => (s.project === "ss" ? "ss" : "pcv") === business;
+  const sales = d.sales.filter(mine);
+  const older = d.older.filter(mine);
+  const ids = new Set([...sales, ...older].map((s) => s.id));
+  return {
+    ...d,
+    sales,
+    older,
+    items: d.items.filter((it) => ids.has(it.sale_id)),
+    salePays: d.salePays.filter((p) => ids.has(p.sale_id)),
+    periodPays: d.periodPays.filter((p) => ids.has(p.sale_id)),
+  };
+}
 
 export function computeProductSales(d: ProductSalesData, f: Filters) {
   const empName = new Map<string, string>((d.profiles as { id: string; full_name: string | null }[]).map((p) => [p.id, p.full_name || "Staff"]));

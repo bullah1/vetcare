@@ -37,7 +37,7 @@ import { printLabelsBatch } from "@/lib/barcode-labels";
 import { refreshAppData } from "@/lib/refresh-data";
 import { fetchAll } from "@/lib/fetch-all";
 import { useProductCategories, LEGACY_CATEGORIES, LEGACY_LABEL, type ProductCategory } from "@/lib/product-categories";
-import { PROJECTS, projectLabel, type Project } from "@/lib/projects";
+import { PROJECTS, asProject, projectLabel, type Project } from "@/lib/projects";
 
 export const Route = createFileRoute("/_authenticated/inventory")({
   head: () => ({ meta: [{ title: "Inventory — Pet Care Vet ERP" }] }),
@@ -202,8 +202,41 @@ function ProductsTab() {
     return matchesSearch && matchesCategory && matchesStock;
   });
 
-  const lowStockCount = products.filter((p) => Number(p.stock_quantity) > 0 && Number(p.stock_quantity) <= Number(p.low_stock_threshold)).length;
-  const outCount = products.filter((p) => Number(p.stock_quantity) <= 0).length;
+  const lowStockCount = products.filter((p) => inProject(p) && Number(p.stock_quantity) > 0 && Number(p.stock_quantity) <= Number(p.low_stock_threshold)).length;
+  const outCount = products.filter((p) => inProject(p) && Number(p.stock_quantity) <= 0).length;
+
+  // Stock value: what the shelf cost (purchase price) and what it sells for.
+  const costValue = (p: Product) => Math.max(0, Number(p.stock_quantity) || 0) * (Number(p.purchase_price) || 0);
+  const saleValue = (p: Product) => Math.max(0, Number(p.stock_quantity) || 0) * (Number(p.selling_price) || 0);
+  const [sortBy, setSortBy] = useState<"name" | "stock" | "value">("name");
+  const [view, setView] = useState<"products" | "categories">("products");
+  const sorted = sortBy === "name" ? filtered
+    : [...filtered].sort((a, b) => sortBy === "stock"
+      ? Number(b.stock_quantity) - Number(a.stock_quantity)
+      : costValue(b) - costValue(a));
+  const totals = filtered.reduce((t, p) => ({
+    qty: t.qty + Math.max(0, Number(p.stock_quantity) || 0),
+    cost: t.cost + costValue(p),
+    sale: t.sale + saleValue(p),
+  }), { qty: 0, cost: 0, sale: 0 });
+  const money = (n: number) => `৳ ${Math.round(n).toLocaleString("en-IN")}`;
+  /** One row per business + category, with totals — the "By category" view. */
+  const byCategory = useMemo(() => {
+    const map = new Map<string, { project: Project; name: string; count: number; qty: number; cost: number; sale: number; low: number; out: number }>();
+    for (const p of products) {
+      if (!inProject(p) || !p.is_active) continue;
+      const project = asProject(p.project);
+      const name = catName(p);
+      const key = `${project}|${name}`;
+      const r = map.get(key) ?? { project, name, count: 0, qty: 0, cost: 0, sale: 0, low: 0, out: 0 };
+      const st = Number(p.stock_quantity) || 0;
+      r.count++; r.qty += Math.max(0, st); r.cost += costValue(p); r.sale += saleValue(p);
+      if (st <= 0) r.out++; else if (st <= Number(p.low_stock_threshold)) r.low++;
+      map.set(key, r);
+    }
+    return [...map.values()].sort((a, b) => a.project.localeCompare(b.project) || b.cost - a.cost);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [products, projectFilter, catById]);
 
   const labelProducts: LabelProduct[] = useMemo(() => {
     const source = selected.size > 0
@@ -338,7 +371,115 @@ function ProductsTab() {
         </Dialog>
       </div>
 
-      <Card>
+      {/* Stock value of what is listed (follows business, category, stock and search filters). */}
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border bg-card px-4 py-3 text-sm">
+        <div><span className="text-muted-foreground">Products</span> <b className="tabular-nums">{filtered.length}</b></div>
+        <div><span className="text-muted-foreground">Stock</span> <b className="tabular-nums">{Math.round(totals.qty).toLocaleString("en-IN")}</b></div>
+        <div><span className="text-muted-foreground">Value at cost</span> <b className="tabular-nums">{money(totals.cost)}</b></div>
+        <div><span className="text-muted-foreground">Value at selling price</span> <b className="tabular-nums">{money(totals.sale)}</b></div>
+        <div><span className="text-muted-foreground">Expected profit</span> <b className="tabular-nums text-emerald-700">{money(totals.sale - totals.cost)}</b></div>
+        <div className="ml-auto flex items-center gap-2">
+          <div className="inline-flex rounded-md border p-0.5" role="tablist" aria-label="View">
+            {([["products", "Products"], ["categories", "By category"]] as const).map(([k, l]) => (
+              <button key={k} type="button" role="tab" aria-selected={view === k} onClick={() => setView(k)}
+                className={`rounded px-3 py-1 text-sm ${view === k ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{l}</button>
+            ))}
+          </div>
+          {view === "products" && (
+            <Select value={sortBy} onValueChange={(v) => setSortBy(v as typeof sortBy)}>
+              <SelectTrigger className="h-8 w-40" aria-label="Sort"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="name">Sort: Name</SelectItem>
+                <SelectItem value="stock">Sort: Most stock</SelectItem>
+                <SelectItem value="value">Sort: Highest value</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+      </div>
+
+      {view === "categories" && (
+        <Card>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Business</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead className="text-right">Products</TableHead>
+                  <TableHead className="text-right">Stock</TableHead>
+                  <TableHead className="text-right">Value at cost</TableHead>
+                  <TableHead className="text-right">Value at selling price</TableHead>
+                  <TableHead className="text-right">Low</TableHead>
+                  <TableHead className="text-right">Out</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {byCategory.length === 0 && (
+                  <TableRow><TableCell colSpan={8} className="py-6 text-center text-muted-foreground">No products.</TableCell></TableRow>
+                )}
+                {byCategory.map((r) => {
+                  const pr = PROJECTS.find((x) => x.key === r.project)!;
+                  const open = (stock: string) => { setCategoryFilter(r.name); setStockFilter(stock); setView("products"); if (projectFilter === "all") setProjectFilterState(r.project); };
+                  return (
+                    <TableRow key={`${r.project}|${r.name}`} className="cursor-pointer" onClick={() => open("all")}>
+                      <TableCell><span className="inline-flex items-center gap-2"><span className="h-2 w-2 rounded-full" style={{ background: pr.tone }} />{pr.short}</span></TableCell>
+                      <TableCell className="font-medium">{r.name}</TableCell>
+                      <TableCell className="text-right tabular-nums">{r.count}</TableCell>
+                      <TableCell className="text-right tabular-nums">{Math.round(r.qty).toLocaleString("en-IN")}</TableCell>
+                      <TableCell className="text-right tabular-nums">{money(r.cost)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{money(r.sale)}</TableCell>
+                      <TableCell className="text-right">
+                        {r.low > 0 ? <button type="button" className="font-medium text-amber-700 underline-offset-2 hover:underline" onClick={(e) => { e.stopPropagation(); open("low"); }}>{r.low}</button> : <span className="text-muted-foreground">0</span>}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {r.out > 0 ? <button type="button" className="font-medium text-destructive underline-offset-2 hover:underline" onClick={(e) => { e.stopPropagation(); open("out"); }}>{r.out}</button> : <span className="text-muted-foreground">0</span>}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {(projectFilter === "all" ? PROJECTS.map((p) => p.key) : [projectFilter]).map((k) => {
+                  const rows = byCategory.filter((r) => r.project === k);
+                  if (!rows.length) return null;
+                  const sum = (f: (r: (typeof rows)[number]) => number) => rows.reduce((n, r) => n + f(r), 0);
+                  return (
+                    <TableRow key={`t-${k}`} className="bg-muted/40 font-semibold">
+                      <TableCell colSpan={2}>Total — {projectLabel(k)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{sum((r) => r.count)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{Math.round(sum((r) => r.qty)).toLocaleString("en-IN")}</TableCell>
+                      <TableCell className="text-right tabular-nums">{money(sum((r) => r.cost))}</TableCell>
+                      <TableCell className="text-right tabular-nums">{money(sum((r) => r.sale))}</TableCell>
+                      <TableCell className="text-right tabular-nums">{sum((r) => r.low)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{sum((r) => r.out)}</TableCell>
+                    </TableRow>
+                  );
+                })}
+                {projectFilter === "all" && byCategory.length > 0 && (
+                  <TableRow className="bg-muted font-bold">
+                    <TableCell colSpan={2}>Grand total</TableCell>
+                    <TableCell className="text-right tabular-nums">{byCategory.reduce((n, r) => n + r.count, 0)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{Math.round(byCategory.reduce((n, r) => n + r.qty, 0)).toLocaleString("en-IN")}</TableCell>
+                    <TableCell className="text-right tabular-nums">{money(byCategory.reduce((n, r) => n + r.cost, 0))}</TableCell>
+                    <TableCell className="text-right tabular-nums">{money(byCategory.reduce((n, r) => n + r.sale, 0))}</TableCell>
+                    <TableCell className="text-right tabular-nums">{byCategory.reduce((n, r) => n + r.low, 0)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{byCategory.reduce((n, r) => n + r.out, 0)}</TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+          <div className="flex justify-end border-t p-2">
+            <Button variant="outline" size="sm" onClick={() => exportToExcel(byCategory.map((r) => ({
+              Business: projectLabel(r.project), Category: r.name, Products: r.count, Stock: r.qty,
+              "Value at cost": Math.round(r.cost), "Value at selling price": Math.round(r.sale), Low: r.low, Out: r.out,
+            })), "stock-by-category", "By category")}>
+              <FileDown className="h-4 w-4" /> Excel
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      <Card className={view === "products" ? "" : "hidden"}>
         <CardContent className="p-0">
           <Table>
             <TableHeader>
@@ -363,15 +504,16 @@ function ProductsTab() {
                 <TableHead>Barcode</TableHead>
                 <TableHead className="text-right">Price</TableHead>
                 <TableHead className="text-right">Stock</TableHead>
+                <TableHead className="text-right">Value</TableHead>
                 <TableHead></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading && <TableRow><TableCell colSpan={8} className="text-center py-6 text-muted-foreground">Loading...</TableCell></TableRow>}
+              {isLoading && <TableRow><TableCell colSpan={9} className="text-center py-6 text-muted-foreground">Loading...</TableCell></TableRow>}
               {!isLoading && filtered.length === 0 && (
-                <TableRow><TableCell colSpan={8} className="text-center py-6 text-muted-foreground">No products yet.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={9} className="text-center py-6 text-muted-foreground">No products yet.</TableCell></TableRow>
               )}
-              {filtered.map((p) => {
+              {sorted.map((p) => {
                 const low = Number(p.stock_quantity) <= Number(p.low_stock_threshold);
                 return (
                   <TableRow key={p.id} data-state={selected.has(p.id) ? "selected" : undefined}>
@@ -411,6 +553,7 @@ function ProductsTab() {
                       </span>
                       {low && <AlertTriangle className="inline h-3.5 w-3.5 ml-1 text-destructive" />}
                     </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">{money(costValue(p))}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
                         <Button
@@ -589,16 +732,15 @@ function ProductDialog({ product, defaultProject = "pcv", onDone }: { product: P
   const qc = useQueryClient();
   const { available: hasCats, cats } = useProductCategories();
   const activeCats = cats.filter((c) => c.is_active || c.id === product?.category_id);
+  // Business first (which shop sells it), then an optional category of that business.
+  const [business, setBusiness] = useState<Project>(product ? asProject(product.project) : defaultProject);
   const [categoryId, setCategoryId] = useState<string>(product?.category_id ?? "");
-  // New product: first category of the project being viewed.
-  useEffect(() => {
-    if (categoryId || !hasCats || product?.category_id) return;
-    const first = activeCats.find((c) => c.project === (product ? (product.project ?? "pcv") : defaultProject)
-      && (!product || c.legacy_category === product.category)) ?? activeCats.find((c) => c.project === defaultProject);
-    if (first) setCategoryId(first.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasCats, cats.length]);
-  const pickedCat = cats.find((c) => c.id === categoryId);
+  const pickedCat = cats.find((c) => c.id === categoryId && c.project === business);
+  const businessCats = activeCats.filter((c) => c.project === business);
+  const pickBusiness = (b: Project) => {
+    setBusiness(b);
+    if (categoryId && cats.find((c) => c.id === categoryId)?.project !== b) setCategoryId("");
+  };
   const [form, setForm] = useState({
     name: product?.name ?? "",
     sku: product?.sku ?? "",
@@ -644,10 +786,10 @@ function ProductDialog({ product, defaultProject = "pcv", onDone }: { product: P
         dose_unit: form.is_prescribable && form.dose_unit.trim() ? form.dose_unit.trim() : null,
       };
       if (hasCats) {
-        if (!pickedCat) throw new Error("Choose a category");
-        // The category decides the project (set on the server too).
-        payload.category_id = pickedCat.id;
-        payload.category = pickedCat.legacy_category;
+        // Category is optional; when set it must be of the same business (the server keeps them in step).
+        payload.project = business;
+        payload.category_id = pickedCat?.id ?? null;
+        if (pickedCat) payload.category = pickedCat.legacy_category;
       }
       const w = wholesale.trim() === "" ? null : Number(wholesale);
       const mn = minPrice.trim() === "" ? null : Number(minPrice);
@@ -704,27 +846,40 @@ function ProductDialog({ product, defaultProject = "pcv", onDone }: { product: P
           <Label>Name</Label>
           <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
         </div>
+        {hasCats && (
+          <div className="space-y-2 sm:col-span-2">
+            <Label>Business</Label>
+            <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Business">
+              {PROJECTS.map((pr) => {
+                const on = business === pr.key;
+                return (
+                  <button
+                    key={pr.key}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    onClick={() => pickBusiness(pr.key)}
+                    className={`flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition-colors ${on ? "border-transparent text-white" : "text-muted-foreground hover:text-foreground"}`}
+                    style={on ? { background: pr.tone } : undefined}
+                  >
+                    <span className="h-2 w-2 rounded-full" style={{ background: on ? "#fff" : pr.tone }} />
+                    {pr.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
         <div className="space-y-2">
           <Label>Category</Label>
           {hasCats ? (
-            <>
-              <Select value={categoryId} onValueChange={setCategoryId}>
-                <SelectTrigger aria-label="Category"><SelectValue placeholder="Choose category" /></SelectTrigger>
-                <SelectContent>
-                  {PROJECTS.map((pr) => {
-                    const list = activeCats.filter((c) => c.project === pr.key);
-                    if (list.length === 0) return null;
-                    return (
-                      <SelectGroup key={pr.key}>
-                        <SelectLabel>{pr.label}</SelectLabel>
-                        {list.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                      </SelectGroup>
-                    );
-                  })}
-                </SelectContent>
-              </Select>
-              {pickedCat && <p className="text-xs text-muted-foreground">Project: {projectLabel(pickedCat.project)}</p>}
-            </>
+            <Select value={pickedCat ? categoryId : "none"} onValueChange={(v) => setCategoryId(v === "none" ? "" : v)}>
+              <SelectTrigger aria-label="Category"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No category</SelectItem>
+                {businessCats.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
           ) : (
             <Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}>
               <SelectTrigger><SelectValue /></SelectTrigger>

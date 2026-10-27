@@ -18,6 +18,9 @@ import { toast } from "sonner";
 import { refreshAppData } from "@/lib/refresh-data";
 import { fetchAll } from "@/lib/fetch-all";
 import { dayRangeISO, todayDhaka } from "@/lib/sales-ledger";
+import { BusinessPicker } from "@/components/BusinessPicker";
+import { useProductCategories } from "@/lib/product-categories";
+import { PROJECTS } from "@/lib/projects";
 
 export const Route = createFileRoute("/_authenticated/accounts")({
   head: () => ({ meta: [{ title: "Accounts — Pet Care Vet ERP" }] }),
@@ -34,7 +37,11 @@ type Expense = {
   paid_to: string | null;
   notes: string | null;
   expense_date: string;
+  /** pcv / ss, or null = shared by both businesses (column exists after the Projects SQL). */
+  project?: string | null;
 };
+type ExpBusiness = "pcv" | "ss" | "shared";
+const expBusinessLabel = (p?: string | null) => PROJECTS.find((x) => x.key === p)?.short ?? "Shared";
 
 type Sale = {
   id: string;
@@ -62,6 +69,16 @@ function AccountsPage() {
   const [to, setTo] = useState(today());
   const [openExp, setOpenExp] = useState(false);
   const [openShift, setOpenShift] = useState<{ shift_id: string; expected_cash: number } | null>(null);
+  // The Projects SQL adds expenses.project; the categories table comes with it.
+  const { available: hasProjects } = useProductCategories();
+  const [expBusiness, setExpBusiness] = useState<ExpBusiness>("shared");
+  const setExpenseBusiness = async (e: Expense, b: ExpBusiness) => {
+    const project = b === "shared" ? null : b;
+    const { error } = await (supabase as any).from("expenses").update({ project }).eq("id", e.id);
+    if (error) return toast.error(error.message);
+    setExpenses((list) => list.map((x) => (x.id === e.id ? { ...x, project } : x)));
+    toast.success(`Expense moved to ${b === "shared" ? "Shared" : expBusinessLabel(b)}`);
+  };
 
   const [expForm, setExpForm] = useState({
     category: "Utilities",
@@ -146,7 +163,8 @@ function AccountsPage() {
       paid_to: expForm.paid_to || null,
       notes: expForm.notes || null,
       expense_date: expForm.expense_date,
-    });
+      ...(hasProjects ? { project: expBusiness === "shared" ? null : expBusiness } : {}),
+    } as never);
     if (error) return toast.error(error.message);
     toast.success("Expense recorded");
     refreshAppData();
@@ -174,6 +192,14 @@ function AccountsPage() {
               <DialogContent>
                 <DialogHeader><DialogTitle>Record Expense</DialogTitle></DialogHeader>
                 <div className="grid gap-3">
+                  {hasProjects && (
+                    <div className="space-y-1.5">
+                      <Label>Business</Label>
+                      <BusinessPicker<ExpBusiness> value={expBusiness} onChange={setExpBusiness}
+                        extra={{ value: "shared", label: "Shared", hint: "For both — split by each business's sales" }} />
+                      {expBusiness === "shared" && <p className="text-xs text-muted-foreground">Shared costs (rent, electricity, salary) are split between the two businesses by their sales.</p>}
+                    </div>
+                  )}
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div><Label>Category</Label>
                       <Select value={expForm.category} onValueChange={(v) => setExpForm({ ...expForm, category: v })}>
@@ -279,15 +305,26 @@ function AccountsPage() {
             <CardContent>
               <Table>
                 <TableHeader><TableRow>
-                  <TableHead>Date</TableHead><TableHead>Category</TableHead>
+                  <TableHead>Date</TableHead>{hasProjects && <TableHead>Business</TableHead>}<TableHead>Category</TableHead>
                   <TableHead>Paid To</TableHead><TableHead>Method</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
                 </TableRow></TableHeader>
                 <TableBody>
-                  {expenses.length === 0 && <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground py-8">No expenses in range</TableCell></TableRow>}
+                  {expenses.length === 0 && <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">No expenses in range</TableCell></TableRow>}
                   {expenses.map(e => (
                     <TableRow key={e.id}>
                       <TableCell>{e.expense_date}</TableCell>
+                      {hasProjects && (
+                        <TableCell>
+                          <Select value={e.project ?? "shared"} onValueChange={(v) => void setExpenseBusiness(e, v as ExpBusiness)}>
+                            <SelectTrigger className="h-8 w-28" aria-label="Business"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {PROJECTS.map((p) => <SelectItem key={p.key} value={p.key}>{p.label}</SelectItem>)}
+                              <SelectItem value="shared">Shared</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </TableCell>
+                      )}
                       <TableCell>{e.category}</TableCell>
                       <TableCell>{e.paid_to || "—"}</TableCell>
                       <TableCell><Badge variant="secondary">{e.method}</Badge></TableCell>

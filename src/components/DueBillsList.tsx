@@ -13,6 +13,8 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CollectDueDialog } from "@/components/CollectDueDialog";
 import { BillStatusBadge, type BillStatus } from "@/components/BillStatusBadge";
 import { printInvoice, type Receipt as PrintReceipt } from "@/lib/invoice-print";
+import { withSchemaFallback } from "@/lib/schema-fallback";
+import { PROJECTS, asProject, projectLabel, type Project } from "@/lib/projects";
 
 export type DueSale = {
   id: string;
@@ -26,6 +28,7 @@ export type DueSale = {
   due: number;
   status: string;
   notes: string | null;
+  project?: string | null;
   owner: { id: string; full_name: string; phone: string | null } | null;
   sale_items: { id: string; name: string; quantity: number; unit_price: number; discount: number; tax: number; line_total: number }[];
   payments: { id: string; method: string; amount: number; reference: string | null }[];
@@ -98,6 +101,7 @@ function toReceipt(s: DueSale): PrintReceipt {
     owner: s.owner ? { full_name: s.owner.full_name, phone: s.owner.phone } : null,
     status: s.status,
     notes: s.notes,
+    project: s.project ?? null,
     items: s.sale_items.map((it) => ({
       name: it.name,
       quantity: Number(it.quantity),
@@ -113,6 +117,14 @@ function toReceipt(s: DueSale): PrintReceipt {
 export function DueBillsList() {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("shop");
+  // Each business keeps its own due.
+  const [business, setBusinessState] = useState<Project | "all">(() => {
+    try { const v = localStorage.getItem("due.business"); return v === "pcv" || v === "ss" ? v : "all"; } catch { return "all"; }
+  });
+  const setBusiness = (b: Project | "all") => {
+    setBusinessState(b);
+    try { localStorage.setItem("due.business", b); } catch { /* ignore */ }
+  };
   const [collect, setCollect] = useState<DueSale | null>(null);
 
   const { data = [], isFetching, refetch } = useQuery({
@@ -120,22 +132,29 @@ export function DueBillsList() {
     queryFn: async () => {
       // Page through everything: a hard .limit() silently dropped the oldest
       // outstanding invoices, so the header totals never matched Receivables.
-      const rows = await fetchAll<DueSale>(() =>
-        supabase
+      const cols = "id,invoice_no,created_at,subtotal,discount,tax,total,paid,due,status,notes, owner:pet_owners(id,full_name,phone), sale_items(id,name,quantity,unit_price,discount,tax,line_total), payments(id,method,amount,reference), courier:courier_orders(courier,status,consignment_id,tracking_code)";
+      const read = (c: string) => fetchAll<DueSale>(() =>
+        (supabase as any)
           .from("sales")
-          .select(
-            "id,invoice_no,created_at,subtotal,discount,tax,total,paid,due,status,notes, owner:pet_owners(id,full_name,phone), sale_items(id,name,quantity,unit_price,discount,tax,line_total), payments(id,method,amount,reference), courier:courier_orders(courier,status,consignment_id,tracking_code)",
-          )
+          .select(c)
           .neq("status", "void")
           .order("created_at", { ascending: false }),
       );
-      return rows;
+      // The project column comes with the Projects SQL; before it every bill is Pet Care Vet.
+      return withSchemaFallback("sales.project", () => read(`${cols},project`), () => read(cols));
     },
   });
 
 
+  const inBusiness = useMemo(
+    () => (business === "all" ? data : data.filter((s) => asProject(s.project) === business)),
+    [data, business],
+  );
+  const dueOf = (k: Project) => data.filter((s) => asProject(s.project) === k && Number(s.due) > 0.009).reduce((a, s) => a + Number(s.due), 0);
+  const hasSs = data.some((s) => asProject(s.project) === "ss");
+
   const rows = useMemo(() => {
-    let list = data;
+    let list = inBusiness;
     // Shop due = counter sales still unpaid; courier due = COD orders with the
     // courier. Kept apart so courier money is followed up with the courier and
     // shop due with the customer.
@@ -150,10 +169,10 @@ export function DueBillsList() {
         (s.owner?.full_name ?? "walk-in").toLowerCase().includes(term) ||
         (s.owner?.phone ?? "").includes(term),
     );
-  }, [data, filter, q]);
+  }, [inBusiness, filter, q]);
 
   const report = useMemo(() => {
-    const due = data.filter((s) => Number(s.due) > 0.009);
+    const due = inBusiness.filter((s) => Number(s.due) > 0.009);
     const shop = due.filter((s) => !courierOf(s));
     const courier = due.filter((s) => !!courierOf(s));
     const sum = (list: DueSale[]) => list.reduce((a, s) => a + Number(s.due), 0);
@@ -166,10 +185,29 @@ export function DueBillsList() {
       courierCount: courier.length,
       collected: due.reduce((a, s) => a + Number(s.paid), 0),
     };
-  }, [data]);
+  }, [inBusiness]);
 
   return (
     <div className="space-y-4">
+      {hasSs && (
+        <div className="grid grid-cols-3 gap-2" role="tablist" aria-label="Business">
+          {([{ key: "all" as const, label: "All", tone: "" }, ...PROJECTS.map((p) => ({ key: p.key, label: p.label, tone: p.tone }))]).map((b) => {
+            const on = business === b.key;
+            const amount = b.key === "all" ? dueOf("pcv") + dueOf("ss") : dueOf(b.key);
+            return (
+              <button key={b.key} type="button" role="tab" aria-selected={on} onClick={() => setBusiness(b.key)}
+                className={`rounded-lg border px-3 py-2 text-left transition-colors ${on ? (b.tone ? "border-transparent text-white" : "border-transparent bg-foreground text-background") : "bg-card hover:bg-muted/50"}`}
+                style={on && b.tone ? { background: b.tone } : undefined}>
+                <div className={`flex items-center gap-1.5 text-xs ${on ? "opacity-85" : "text-muted-foreground"}`}>
+                  {b.tone && <span className="h-2 w-2 rounded-full" style={{ background: on ? "#fff" : b.tone }} />}
+                  {b.label}
+                </div>
+                <div className={`text-lg font-semibold tabular-nums ${on ? "" : "text-destructive"}`}>{fmt(amount)}</div>
+              </button>
+            );
+          })}
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <button type="button" className="text-left" onClick={() => setFilter("shop")}>
           <Card className={filter === "shop" ? "ring-2 ring-primary" : ""}><CardContent className="p-4">
@@ -244,6 +282,7 @@ export function DueBillsList() {
                     <TableCell>
                       <div className="font-medium">{s.invoice_no}</div>
                       <div className="text-xs text-muted-foreground">
+                        {hasSs && business === "all" && <>{projectLabel(s.project)} · </>}
                         {format(new Date(s.created_at), "dd MMM yyyy, hh:mm a")}
                       </div>
                     </TableCell>

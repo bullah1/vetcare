@@ -3,34 +3,48 @@
 // drawer entries as Due Bills), so nothing is counted twice.
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import type { Project } from "@/lib/projects";
 
 const db = supabase as any;
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 export type OpenBill = { id: string; invoice_no: string; created_at: string; due: number };
 
-export async function fetchOpenBills(ownerId: string, excludeSaleId?: string | null): Promise<OpenBill[]> {
-  let q = db
-    .from("sales")
-    .select("id,invoice_no,created_at,due,status")
-    .eq("owner_id", ownerId)
-    .gt("due", 0.009)
-    .not("status", "in", "(void,refunded)")
-    .order("created_at", { ascending: true })
-    .order("id");
-  if (excludeSaleId) q = q.neq("id", excludeSaleId);
-  const { data, error } = await q;
+/**
+ * Unpaid bills of a customer, oldest first. With `project`, only that business's
+ * bills (each business keeps its own due). Before the Projects SQL every bill is
+ * Pet Care Vet, so a missing column means: pcv → all bills, ss → none.
+ */
+export async function fetchOpenBills(ownerId: string, excludeSaleId?: string | null, project?: Project | null): Promise<OpenBill[]> {
+  const build = (withProject: boolean) => {
+    let q = db
+      .from("sales")
+      .select("id,invoice_no,created_at,due,status")
+      .eq("owner_id", ownerId)
+      .gt("due", 0.009)
+      .not("status", "in", "(void,refunded)")
+      .order("created_at", { ascending: true })
+      .order("id");
+    if (excludeSaleId) q = q.neq("id", excludeSaleId);
+    if (withProject && project) q = q.eq("project", project);
+    return q;
+  };
+  let { data, error } = await build(!!project);
+  if (error && project && /project/.test(error.message ?? "")) {
+    if (project === "ss") return [];
+    ({ data, error } = await build(false));
+  }
   if (error) throw error;
   return (data ?? []).map((s: any) => ({ id: s.id, invoice_no: s.invoice_no, created_at: s.created_at, due: Number(s.due) }));
 }
 
 /** Previous due of a customer (0 for walk-in). */
-export function usePreviousDue(ownerId: string | null | undefined) {
+export function usePreviousDue(ownerId: string | null | undefined, project?: Project | null) {
   const q = useQuery({
-    queryKey: ["previous-due", ownerId],
+    queryKey: ["previous-due", ownerId, project ?? "all"],
     enabled: !!ownerId,
     staleTime: 0,
-    queryFn: () => fetchOpenBills(ownerId!),
+    queryFn: () => fetchOpenBills(ownerId!, null, project),
   });
   const bills = ownerId ? q.data ?? [] : [];
   return { bills, total: r2(bills.reduce((a, b) => a + b.due, 0)), loading: q.isLoading && !!ownerId };
@@ -47,8 +61,9 @@ export async function payPreviousDues(
   payments: { method: string; amount: number }[],
   excludeSaleId: string | null,
   forInvoice: string,
+  project?: Project | null,
 ): Promise<PrevDueResult> {
-  const bills = await fetchOpenBills(ownerId, excludeSaleId);
+  const bills = await fetchOpenBills(ownerId, excludeSaleId, project);
   const before = r2(bills.reduce((a, b) => a + b.due, 0));
   const invoices: { invoice_no: string; amount: number }[] = [];
   let paid = 0;

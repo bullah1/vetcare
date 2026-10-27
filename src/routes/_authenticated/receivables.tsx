@@ -18,6 +18,9 @@ import { CustomerLedger } from "@/components/CustomerLedger";
 import { NewCustomerDialog } from "@/components/NewCustomerDialog";
 import { fetchAll } from "@/lib/fetch-all";
 
+import { withSchemaFallback } from "@/lib/schema-fallback";
+import { PROJECTS, asProject } from "@/lib/projects";
+
 export const Route = createFileRoute("/_authenticated/receivables")({
   head: () => ({
     meta: [
@@ -40,6 +43,7 @@ type SaleRow = {
   paid: number;
   due: number;
   status: string;
+  project?: string | null;
   owner_id: string | null;
   owner: { id: string; full_name: string; phone: string | null } | null;
 };
@@ -61,14 +65,24 @@ function CustomersPage() {
       // Paged reads: the API caps a response at 1000 rows, so older invoices
       // (and their dues) and customers beyond the first 1000 were missing.
       const [sales, owners] = await Promise.all([
-        fetchAll<SaleRow>(
-          () =>
-            supabase
+        withSchemaFallback(
+          "sales.project",
+          () => fetchAll<SaleRow>(
+            () => (supabase as any)
+              .from("sales")
+              .select("id,invoice_no,created_at,total,paid,due,status,project,owner_id, owner:pet_owners(id,full_name,phone)")
+              .order("created_at", { ascending: false })
+              .order("id"),
+            200000,
+          ),
+          () => fetchAll<SaleRow>(
+            () => supabase
               .from("sales")
               .select("id,invoice_no,created_at,total,paid,due,status,owner_id, owner:pet_owners(id,full_name,phone)")
               .order("created_at", { ascending: false })
               .order("id"),
-          200000,
+            200000,
+          ),
         ),
         fetchAll<Owner>(
           () => supabase.from("pet_owners").select("id,full_name,phone,created_at").order("full_name").order("id"),
@@ -83,9 +97,10 @@ function CustomersPage() {
   const owners = data?.owners ?? [];
 
   const groups = useMemo(() => {
-    const map = new Map<string, { key: string; name: string; phone: string | null; due: number; spent: number; sales: SaleRow[] }>();
+    type G = { key: string; name: string; phone: string | null; due: number; duePcv: number; dueSs: number; spent: number; sales: SaleRow[] };
+    const map = new Map<string, G>();
     for (const o of owners) {
-      map.set(o.id, { key: o.id, name: o.full_name, phone: o.phone, due: 0, spent: 0, sales: [] });
+      map.set(o.id, { key: o.id, name: o.full_name, phone: o.phone, due: 0, duePcv: 0, dueSs: 0, spent: 0, sales: [] });
     }
     for (const s of sales) {
       const key = s.owner?.id ?? "walkin";
@@ -94,11 +109,15 @@ function CustomersPage() {
         name: s.owner?.full_name ?? "Walk-in customer",
         phone: s.owner?.phone ?? null,
         due: 0,
+        duePcv: 0,
+        dueSs: 0,
         spent: 0,
         sales: [],
       };
       if (s.status !== "void") {
         g.due += Number(s.due);
+        // Each business keeps its own due.
+        if (asProject(s.project) === "ss") g.dueSs += Number(s.due); else g.duePcv += Number(s.due);
         // paid + due = invoice value after returns (gross total overstated
         // spend for partly / fully returned invoices).
         g.spent += Number(s.paid) + Number(s.due);
@@ -122,8 +141,11 @@ function CustomersPage() {
     const due = groups.reduce((a, g) => a + g.due, 0);
     const spent = groups.reduce((a, g) => a + g.spent, 0);
     const withDue = groups.filter((g) => g.due > 0).length;
-    return { customers: groups.length, withDue, due, spent };
+    const duePcv = groups.reduce((a, g) => a + g.duePcv, 0);
+    const dueSs = groups.reduce((a, g) => a + g.dueSs, 0);
+    return { customers: groups.length, withDue, due, spent, duePcv, dueSs };
   }, [groups]);
+  const hasSs = sales.some((s) => asProject(s.project) === "ss");
 
   return (
     <div className="p-0 sm:p-2">
@@ -148,6 +170,7 @@ function CustomersPage() {
                     Purchases: g.sales.length,
                     "Last Visit": g.sales[0] ? format(new Date(g.sales[0].created_at), "dd MMM yyyy") : "",
                     "Lifetime Spend": g.spent,
+                    ...(hasSs ? { "Due — Pet Care Vet": g.duePcv, "Due — Sasthya Seba": g.dueSs } : {}),
                     Due: g.due,
                   })),
                   "customer-list",
@@ -166,7 +189,18 @@ function CustomersPage() {
         <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Total customers</div><div className="text-xl sm:text-2xl font-semibold">{totals.customers}</div></CardContent></Card>
         <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Customers with due</div><div className="text-xl sm:text-2xl font-semibold text-amber-600">{totals.withDue}</div></CardContent></Card>
         <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Lifetime sales</div><div className="text-xl sm:text-2xl font-semibold">{fmt(totals.spent)}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Total receivable</div><div className="text-xl sm:text-2xl font-semibold text-destructive">{fmt(totals.due)}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Total receivable</div><div className="text-xl sm:text-2xl font-semibold text-destructive">{fmt(totals.due)}</div>
+          {hasSs && (
+            <div className="mt-1 space-y-0.5 text-xs">
+              {PROJECTS.map((p) => (
+                <div key={p.key} className="flex justify-between gap-2">
+                  <span className="flex items-center gap-1.5 text-muted-foreground"><span className="h-1.5 w-1.5 rounded-full" style={{ background: p.tone }} />{p.label}</span>
+                  <span className="tabular-nums">{fmt(p.key === "ss" ? totals.dueSs : totals.duePcv)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent></Card>
       </div>
 
       <Card className="mb-4">
@@ -233,6 +267,13 @@ function CustomersPage() {
                       <TableCell className="text-right tabular-nums">{fmt(g.spent)}</TableCell>
                       <TableCell className="text-right tabular-nums font-semibold">
                         {g.due > 0 ? <span className="text-destructive">{fmt(g.due)}</span> : <Badge variant="secondary">Clear</Badge>}
+                        {hasSs && g.due > 0 && (
+                          <div className="text-[11px] font-normal text-muted-foreground">
+                            {g.duePcv > 0 && <span>PCV {fmt(g.duePcv)}</span>}
+                            {g.duePcv > 0 && g.dueSs > 0 && " · "}
+                            {g.dueSs > 0 && <span>SS {fmt(g.dueSs)}</span>}
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                         {g.key !== "walkin" && (

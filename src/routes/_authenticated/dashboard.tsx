@@ -1,3 +1,4 @@
+import { BusinessTodayStrip } from "@/components/BusinessTodayStrip";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
@@ -408,6 +409,8 @@ function Dashboard() {
           </div>
         )}
       </header>
+
+      <BusinessTodayStrip />
 
       {/* Today hero + attention */}
       <div className="grid min-w-0 gap-4 sm:gap-5 xl:grid-cols-12">

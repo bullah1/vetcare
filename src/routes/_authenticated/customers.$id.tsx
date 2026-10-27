@@ -19,6 +19,8 @@ import { CustomerPaymentDialog } from "@/components/CustomerPaymentDialog";
 import { fetchCustomerProfileStats } from "@/lib/customer-mix";
 import { daysSince } from "@/lib/customer-insights";
 import { fetchAll } from "@/lib/fetch-all";
+import { withSchemaFallback } from "@/lib/schema-fallback";
+import { asProject, projectLabel, PROJECTS } from "@/lib/projects";
 
 export const Route = createFileRoute("/_authenticated/customers/$id")({
   head: () => ({
@@ -36,6 +38,7 @@ export const Route = createFileRoute("/_authenticated/customers/$id")({
 
 type Sale = {
   id: string;
+  project?: string | null;
   invoice_no: string;
   created_at: string;
   total: number;
@@ -58,13 +61,20 @@ function CustomerDetailPage() {
       const [ownerRes, salesRes, apptRes, petsRes] = await Promise.all([
         supabase.from("pet_owners").select("id,full_name,phone,gender,email,address,notes,created_at").eq("id", id).maybeSingle(),
         // All invoices: totals below were summed over only the latest 200.
-        fetchAll<Sale>(() =>
-          supabase
+        withSchemaFallback(
+          "sales.project",
+          () => fetchAll<Sale>(() => (supabase as any)
+            .from("sales")
+            .select("id,invoice_no,created_at,total,paid,due,status,project")
+            .eq("owner_id", id)
+            .order("created_at", { ascending: false })
+            .order("id")),
+          () => fetchAll<Sale>(() => supabase
             .from("sales")
             .select("id,invoice_no,created_at,total,paid,due,status")
             .eq("owner_id", id)
             .order("created_at", { ascending: false })
-            .order("id"),
+            .order("id")),
         ).then((data) => ({ data, error: null })),
         supabase
           .from("appointments")
@@ -108,6 +118,9 @@ function CustomerDetailPage() {
     const active = sales.filter((s) => s.status !== "void");
     return {
       due: active.reduce((a, s) => a + Number(s.due), 0),
+      // Each business keeps its own due.
+      dueBy: Object.fromEntries(PROJECTS.map((p) => [p.key, active.filter((s) => asProject(s.project) === p.key).reduce((a, s) => a + Number(s.due), 0)])) as Record<string, number>,
+      hasSs: active.some((s) => asProject(s.project) === "ss"),
       paid: active.reduce((a, s) => a + Number(s.paid), 0),
       // value after returns (gross total overstated returned invoices)
       billed: active.reduce((a, s) => a + Number(s.paid) + Number(s.due), 0),
@@ -145,7 +158,18 @@ function CustomerDetailPage() {
       />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Current due</div><div className={`text-xl sm:text-2xl font-semibold ${totals.due > 0 ? "text-destructive" : ""}`}>{fmt(totals.due)}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Current due</div><div className={`text-xl sm:text-2xl font-semibold ${totals.due > 0 ? "text-destructive" : ""}`}>{fmt(totals.due)}</div>
+          {totals.hasSs && (
+            <div className="mt-1 space-y-0.5 text-xs">
+              {PROJECTS.map((p) => (
+                <div key={p.key} className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 text-muted-foreground"><span className="h-1.5 w-1.5 rounded-full" style={{ background: p.tone }} />{p.label}</span>
+                  <span className="tabular-nums">{fmt(totals.dueBy[p.key] ?? 0)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent></Card>
         <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Total paid</div><div className="text-xl sm:text-2xl font-semibold text-emerald-600">{fmt(totals.paid)}</div></CardContent></Card>
         <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Lifetime billed</div><div className="text-xl sm:text-2xl font-semibold">{fmt(totals.billed)}</div></CardContent></Card>
         <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Invoices</div><div className="text-xl sm:text-2xl font-semibold">{totals.count}</div></CardContent></Card>
@@ -280,7 +304,10 @@ function CustomerDetailPage() {
                     {sales.slice(0, 50).map((s) => (
                       <TableRow key={s.id}>
                         <TableCell>
-                          <div className="font-medium">{s.invoice_no}</div>
+                          <div className="font-medium">
+                            {s.invoice_no}
+                            {totals.hasSs && <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">{projectLabel(s.project)}</span>}
+                          </div>
                           <div className="text-xs text-muted-foreground">{format(new Date(s.created_at), "dd MMM yyyy, hh:mm a")}</div>
                         </TableCell>
                         <TableCell>
@@ -322,7 +349,7 @@ function CustomerDetailPage() {
         customerName={owner.full_name}
         invoices={sales
           .filter((s) => s.status !== "void" && Number(s.due) > 0)
-          .map((s) => ({ id: s.id, invoice_no: s.invoice_no, due: Number(s.due), created_at: s.created_at }))}
+          .map((s) => ({ id: s.id, invoice_no: s.invoice_no, due: Number(s.due), created_at: s.created_at, project: asProject(s.project) }))}
         onRecorded={() => refetchAll()}
       />
 

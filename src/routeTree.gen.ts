@@ -14,6 +14,7 @@ import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AuthenticatedAccountsRouteImport } from './routes/_authenticated/accounts'
 import { Route as AuthenticatedAdjustmentsRouteImport } from './routes/_authenticated/adjustments'
+import { Route as AuthenticatedAnalysisRouteImport } from './routes/_authenticated/analysis'
 import { Route as AuthenticatedAppointmentHistoryRouteImport } from './routes/_authenticated/appointment-history'
 import { Route as AuthenticatedAppointmentsRouteImport } from './routes/_authenticated/appointments'
 import { Route as AuthenticatedBusinessReportRouteImport } from './routes/_authenticated/business-report'
@@ -70,6 +71,11 @@ const AuthenticatedAdjustmentsRoute =
     path: '/adjustments',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedAnalysisRoute = AuthenticatedAnalysisRouteImport.update({
+  id: '/analysis',
+  path: '/analysis',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedAppointmentHistoryRoute =
   AuthenticatedAppointmentHistoryRouteImport.update({
     id: '/appointment-history',
@@ -240,6 +246,7 @@ export interface FileRoutesByFullPath {
   '/auth': typeof AuthRoute
   '/accounts': typeof AuthenticatedAccountsRoute
   '/adjustments': typeof AuthenticatedAdjustmentsRoute
+  '/analysis': typeof AuthenticatedAnalysisRoute
   '/appointment-history': typeof AuthenticatedAppointmentHistoryRoute
   '/appointments': typeof AuthenticatedAppointmentsRoute
   '/business-report': typeof AuthenticatedBusinessReportRoute
@@ -276,6 +283,7 @@ export interface FileRoutesByTo {
   '/auth': typeof AuthRoute
   '/accounts': typeof AuthenticatedAccountsRoute
   '/adjustments': typeof AuthenticatedAdjustmentsRoute
+  '/analysis': typeof AuthenticatedAnalysisRoute
   '/appointment-history': typeof AuthenticatedAppointmentHistoryRoute
   '/appointments': typeof AuthenticatedAppointmentsRoute
   '/business-report': typeof AuthenticatedBusinessReportRoute
@@ -314,6 +322,7 @@ export interface FileRoutesById {
   '/auth': typeof AuthRoute
   '/_authenticated/accounts': typeof AuthenticatedAccountsRoute
   '/_authenticated/adjustments': typeof AuthenticatedAdjustmentsRoute
+  '/_authenticated/analysis': typeof AuthenticatedAnalysisRoute
   '/_authenticated/appointment-history': typeof AuthenticatedAppointmentHistoryRoute
   '/_authenticated/appointments': typeof AuthenticatedAppointmentsRoute
   '/_authenticated/business-report': typeof AuthenticatedBusinessReportRoute
@@ -352,6 +361,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/accounts'
     | '/adjustments'
+    | '/analysis'
     | '/appointment-history'
     | '/appointments'
     | '/business-report'
@@ -388,6 +398,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/accounts'
     | '/adjustments'
+    | '/analysis'
     | '/appointment-history'
     | '/appointments'
     | '/business-report'
@@ -425,6 +436,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/_authenticated/accounts'
     | '/_authenticated/adjustments'
+    | '/_authenticated/analysis'
     | '/_authenticated/appointment-history'
     | '/_authenticated/appointments'
     | '/_authenticated/business-report'
@@ -499,6 +511,13 @@ declare module '@tanstack/react-router' {
       path: '/adjustments'
       fullPath: '/adjustments'
       preLoaderRoute: typeof AuthenticatedAdjustmentsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/analysis': {
+      id: '/_authenticated/analysis'
+      path: '/analysis'
+      fullPath: '/analysis'
+      preLoaderRoute: typeof AuthenticatedAnalysisRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/appointment-history': {
@@ -717,6 +736,7 @@ declare module '@tanstack/react-router' {
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedAccountsRoute: typeof AuthenticatedAccountsRoute
   AuthenticatedAdjustmentsRoute: typeof AuthenticatedAdjustmentsRoute
+  AuthenticatedAnalysisRoute: typeof AuthenticatedAnalysisRoute
   AuthenticatedAppointmentHistoryRoute: typeof AuthenticatedAppointmentHistoryRoute
   AuthenticatedAppointmentsRoute: typeof AuthenticatedAppointmentsRoute
   AuthenticatedBusinessReportRoute: typeof AuthenticatedBusinessReportRoute
@@ -751,6 +771,7 @@ interface AuthenticatedRouteRouteChildren {
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAccountsRoute: AuthenticatedAccountsRoute,
   AuthenticatedAdjustmentsRoute: AuthenticatedAdjustmentsRoute,
+  AuthenticatedAnalysisRoute: AuthenticatedAnalysisRoute,
   AuthenticatedAppointmentHistoryRoute: AuthenticatedAppointmentHistoryRoute,
   AuthenticatedAppointmentsRoute: AuthenticatedAppointmentsRoute,
   AuthenticatedBusinessReportRoute: AuthenticatedBusinessReportRoute,
