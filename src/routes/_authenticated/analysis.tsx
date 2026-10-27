@@ -163,6 +163,19 @@ function AnalysisPage() {
         </div>
       )}
 
+      {cur && cur.all.noCost.length > 0 && (
+        <Card className="border-amber-300 bg-amber-50/60 dark:bg-amber-950/20">
+          <CardContent className="space-y-1 p-3 text-sm">
+            <p className="font-medium text-amber-900 dark:text-amber-200">
+              {cur.all.noCost.length} product{cur.all.noCost.length > 1 ? "s were" : " was"} sold without a purchase price — {fmt(cur.all.noCost.reduce((t, x) => t + x.revenue, 0))} of sales is counted as full profit.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Set the purchase price in Inventory and profit corrects itself: {cur.all.noCost.slice(0, 6).map((x) => x.name).join(", ")}{cur.all.noCost.length > 6 ? "…" : ""}
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       {cur && cur.shared.total > 0 && (
         <p className="text-xs text-muted-foreground">
           Shared expenses {fmt(cur.shared.total)} are split by sales: Pet Care Vet {(cur.shared.pcvShare * 100).toFixed(0)}% ({fmt(cur.shared.total * cur.shared.pcvShare)}),

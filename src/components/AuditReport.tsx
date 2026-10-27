@@ -164,14 +164,14 @@ export function AuditReport({ from, to }: { from: string; to: string }) {
             <div className={`text-2xl font-bold ${summary.errors ? "text-destructive" : "text-emerald-600"}`}>
               {summary.errors}
             </div>
-            <div className="mt-1 text-[11px] text-muted-foreground">হিসাব না মেলা entry</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">entries that do not match</div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-3 sm:p-4">
             <div className="text-xs text-muted-foreground">Needs review</div>
             <div className="text-2xl font-bold text-amber-600">{summary.warnings}</div>
-            <div className="mt-1 text-[11px] text-muted-foreground">duplicate / সন্দেহজনক</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">duplicate / suspicious</div>
           </CardContent>
         </Card>
         <Card>
@@ -261,7 +261,7 @@ export function AuditReport({ from, to }: { from: string; to: string }) {
           {!error && !loading && filtered.length === 0 && (
             <div className="flex flex-col items-center gap-2 py-8 text-center">
               <CheckCircle2 className="h-8 w-8 text-emerald-600" />
-              <div className="text-sm font-medium">সব হিসাব মিলে গেছে — no mismatch found</div>
+              <div className="text-sm font-medium">Everything matches — no mismatch found</div>
               <div className="text-xs text-muted-foreground">
                 Invoice math, payments, refunds, cash trail and stock all reconcile for this range.
               </div>

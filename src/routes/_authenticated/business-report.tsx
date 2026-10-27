@@ -472,7 +472,7 @@ function StockTab({ c, s }: { c: Computed; s: ReturnType<typeof computeSnapshot>
         <Kpi label="Units in stock" value={s.units} raw={Math.round(s.units).toLocaleString("en-BD")} sub={`${s.low} low · ${s.out} out`} />
         <Kpi label="Expired / expiring" value={s.expiredValue + s.expiringValue} sub={`expired ${fmt(s.expiredValue)} · 30 days ${fmt(s.expiringValue)}`} tone={s.expiredValue ? "text-destructive" : ""} />
         <Kpi label="Stock written off" value={c.stockAdj.loss} sub="damage · expired · loss (this period)" tone={c.stockAdj.loss ? "text-destructive" : ""} />
-        <Kpi label="Stock found" value={c.stockAdj.found} sub="this period" />
+        <Kpi label="Stock corrections" value={c.stockAdj.found + c.stockAdj.correction} sub="count fixes · not in profit" />
         <Kpi label="Purchased this period" value={c.purchases.total} />
         <Kpi label="Sold at cost (COGS)" value={c.cogs} />
       </div>

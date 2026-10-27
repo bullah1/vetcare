@@ -1,3 +1,4 @@
+import { computePeriod, isPurchaseExpense, loadPeriod } from "@/lib/business-report";
 import { BusinessTodayStrip } from "@/components/BusinessTodayStrip";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
@@ -12,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { CustomerMixCard } from "@/components/CustomerMixCard";
 import { fetchAll } from "@/lib/fetch-all";
 import { dayRangeISO } from "@/lib/sales-ledger";
-import { dhakaDayKey, shiftDay, summarizeSales } from "@/lib/sales-summary";
+import { dhakaDayKey, shiftDay } from "@/lib/sales-summary";
 import {
   CalendarDays,
   CalendarPlus,
@@ -68,7 +69,8 @@ function moneyShort(n: number) {
   return String(Math.round(n));
 }
 function pct(curr: number, prev: number) {
-  if (!prev) return curr > 0 ? 100 : 0;
+  // Nothing last time: a % change means nothing, show "New" instead of a fake 100%.
+  if (!prev) return curr ? Number.NaN : 0;
   return ((curr - prev) / Math.abs(prev)) * 100;
 }
 const dayKey = dhakaDayKey;
@@ -116,6 +118,7 @@ function Dashboard() {
         pendingList,
         supplierDues,
         batches,
+        period,
       ] = await Promise.all([
         fetchAll(() => supabase.from("sales").select("id,subtotal,total,paid,due,discount,status,created_at,owner_id,pet_owners(full_name,phone)").gte("created_at", rangeStartISO).lte("created_at", rangeEndISO).order("created_at", { ascending: false })).then(data => ({ data })),
         supabase.from("appointments").select("id", { count: "exact", head: true }).gte("scheduled_at", startOfToday.toISOString()).lt("scheduled_at", new Date(startOfToday.getTime() + 86400000).toISOString()),
@@ -125,11 +128,14 @@ function Dashboard() {
         supabase.from("payments").select("id,amount,method,reference,received_at,sale_id,sales(invoice_no)").gte("received_at", startOfToday.toISOString()).lte("received_at", rangeEndISO).order("received_at", { ascending: false }),
         fetchAll(() => supabase.from("sale_returns").select("id,sale_id,refund_amount,created_at,sales(status),sale_return_items(quantity,sale_items(cost_price,products(purchase_price)))").gte("created_at", rangeStartISO).lte("created_at", rangeEndISO).order("created_at")).then(data => ({ data })),
         supabase.from("expenses").select("id,amount,category,paid_to,method,notes,expense_date").eq("expense_date", todayDate).order("created_at", { ascending: false }),
-        supabase.from("expenses").select("amount,expense_date,category").gte("expense_date", rangeStartDate).lte("expense_date", todayDate),
+        supabase.from("expenses").select("amount,expense_date,category,purchase_invoice_id").gte("expense_date", rangeStartDate).lte("expense_date", todayDate),
         supabase.from("sales").select("id,invoice_no,total,paid,due,created_at,pet_owners(full_name)").gt("due", 0).not("status", "in", "(refunded,void)").order("created_at", { ascending: false }).limit(10),
         supabase.from("appointments").select("id,scheduled_at,status").in("status", ["pending", "confirmed"]).gte("scheduled_at", startOfToday.toISOString()),
         supabase.from("suppliers").select("id,name,balance_due").gt("balance_due", 0).order("balance_due", { ascending: false }).limit(10),
         fetchAll(() => supabase.from("stock_batches").select("product_id,quantity,expiry_date,products(name)").gt("quantity", 0).not("expiry_date", "is", null).order("id")).then(data => ({ data })),
+        // Same accounting engine as the Business Report / Analysis, so sales and
+        // profit agree everywhere (cancelled bills, returns, cost at sale time).
+        loadPeriod({ from: rangeStartDate, to: todayDate }).then(computePeriod),
       ]);
 
       const sales = salesRange.data ?? [];
@@ -137,14 +143,14 @@ function Dashboard() {
       const products = allProducts.data ?? [];
       const prodMap = new Map(products.map((p: any) => [p.id, p]));
 
-      const summary = summarizeSales(sales, items, returns30.data ?? [], rangeStartDate, todayDate);
+      const engineDays = new Map(period.daily.map((r) => [r.day, r]));
       const completedSaleIds = new Set(sales.map((s: any) => s.id));
       const byDay: Record<string, { day: string; gross: number; refund: number; sales: number; profit: number; expense: number; orders: number; due: number; paid: number }> = {};
       for (let i = 0; i < 30; i++) {
         const k = shiftDay(start30Date, i);
-        const row = summary.daily.get(k);
-        byDay[k] = { day: k.slice(5), gross: row?.gross ?? 0, refund: row?.refund ?? 0,
-          sales: row?.rev ?? 0, profit: (row?.rev ?? 0) - (row?.cogs ?? 0),
+        const row = engineDays.get(k);
+        byDay[k] = { day: k.slice(5), gross: row?.sales ?? 0, refund: row?.reversals ?? 0,
+          sales: row?.net ?? 0, profit: row?.profit ?? 0,
           expense: 0, orders: 0, due: 0, paid: 0 };
       }
       sales.forEach((s: any) => {
@@ -153,6 +159,8 @@ function Dashboard() {
         row.orders += 1; row.due += Number(s.due || 0); row.paid += Number(s.paid || 0);
       });
       (expenses30.data ?? []).forEach((e: any) => {
+        // Purchases are stock, not expense.
+        if (isPurchaseExpense(e)) return;
         if (byDay[e.expense_date]) byDay[e.expense_date].expense += Number(e.amount);
       });
       const series = Object.values(byDay);
@@ -170,17 +178,12 @@ function Dashboard() {
       const yestExp = byDay[yKey]?.expense ?? 0;
       const todayOrders = byDay[todayKey]?.orders ?? 0;
       const yestOrders = byDay[yKey]?.orders ?? 0;
-      const monthTotal = summarizeSales(sales, items, returns30.data ?? [], monthDate, todayDate).totals.rev;
-
-      const previousRange = dayRangeISO(lastMonthDate, lastMonthEnd);
-      const [lastMonthSales, lastMonthReturns, lastMonthExp] = await Promise.all([
-        fetchAll(() => supabase.from("sales").select("id,total,created_at").gte("created_at", previousRange.fromISO).lte("created_at", previousRange.toISO).order("id")),
-        fetchAll(() => supabase.from("sale_returns").select("id,refund_amount,created_at").gte("created_at", previousRange.fromISO).lte("created_at", previousRange.toISO).order("id")),
-        fetchAll(() => supabase.from("expenses").select("amount").gte("expense_date", lastMonthDate).lte("expense_date", lastMonthEnd).order("id")),
-      ]);
-      const lastMonthTotal = summarizeSales(lastMonthSales, [], lastMonthReturns, lastMonthDate, lastMonthEnd).totals.rev;
-      const monthExp = (expenses30.data ?? []).filter((e: any) => e.expense_date >= monthDate).reduce((s: number, e: any) => s + Number(e.amount), 0);
-      const lastMonthExpense = lastMonthExp.reduce((s: number, r: any) => s + Number(r.amount), 0);
+      // Month figures from the same engine as the Business Report.
+      const monthTotal = period.daily.filter((r) => r.day >= monthDate).reduce((t, r) => t + r.net, 0);
+      const lastMonth = computePeriod(await loadPeriod({ from: lastMonthDate, to: lastMonthEnd }));
+      const lastMonthTotal = lastMonth.sales.netSales;
+      const monthExp = (expenses30.data ?? []).filter((e: any) => e.expense_date >= monthDate && !isPurchaseExpense(e)).reduce((s: number, e: any) => s + Number(e.amount), 0);
+      const lastMonthExpense = lastMonth.opex;
 
       // Top customers (30d)
       const custTally: Record<string, { name: string; total: number; orders: number }> = {};
@@ -384,7 +387,7 @@ function Dashboard() {
     { label: "Due today", value: money(stats?.todayDue ?? 0), hint: "Left unpaid on today's bills", warn: (stats?.todayDue ?? 0) > 0 },
     { label: "Bills", value: String(stats?.todayOrders ?? 0), hint: `${stats?.yestOrders ?? 0} yesterday` },
     isAdmin
-      ? { label: "Profit", value: money(stats?.todayProfit ?? 0), hint: `${money(stats?.yestProfit ?? 0)} yesterday` }
+      ? { label: "Gross profit", value: money(stats?.todayProfit ?? 0), hint: `before expenses · ${money(stats?.yestProfit ?? 0)} yesterday` }
       : { label: "Appointments", value: String(stats?.todayApptsCount ?? 0), hint: "Scheduled today" },
   ];
 
@@ -532,7 +535,7 @@ function Dashboard() {
                 <Segmented
                   value={trendMetric}
                   onChange={(v) => setTrendMetric(v as any)}
-                  options={[{ value: "sales", label: "Sales" }, { value: "profit", label: "Profit" }, { value: "expense", label: "Expense" }]}
+                  options={[{ value: "sales", label: "Sales" }, { value: "profit", label: "Gross profit" }, { value: "expense", label: "Expense" }]}
                 />
               )}
               <Segmented value={trendRange} onChange={(v) => setTrendRange(v as any)} options={[{ value: "7", label: "7 days" }, { value: "30", label: "30 days" }]} />
@@ -872,6 +875,9 @@ function prettyCat(c: string) {
 }
 
 function DeltaChip({ delta, invert, dark, neutral }: { delta: number; invert?: boolean; dark?: boolean; neutral?: boolean }) {
+  if (Number.isNaN(delta)) {
+    return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${dark ? "bg-white/10 text-white/70" : "bg-muted text-muted-foreground"}`}>New</span>;
+  }
   if (neutral || Math.abs(delta) < 0.05) {
     return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${dark ? "bg-white/10 text-white/60" : "bg-muted text-muted-foreground"}`}>No change</span>;
   }

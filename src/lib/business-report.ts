@@ -15,7 +15,8 @@
 //  - Net Delivery Income = delivery charges paid by customers on delivered
 //    parcels − the real cost (rider fees, courier deductions, return charges).
 //  - Net Profit = Gross Profit + Net Delivery Income − Operating Expenses
-//                 − stock written off (damaged / expired / lost) + stock found.
+//                 − stock written off (damaged / expired / lost).
+//    Stock corrections and "found" stock only fix counts; they are not profit.
 //  - Clinic revenue = consultation invoices (appointments create an invoice),
 //    so it is already inside Sales — split out, never added twice.
 //  - Tax / VAT is not deducted (not tracked separately).
@@ -54,6 +55,8 @@ export const isPurchaseExpense = (e: any) =>
   !!e.purchase_invoice_id || ["Supplier Payment", "Purchase"].includes(String(e.category));
 const DOCTOR_CATS = new Set(["Doctor Fee", "Doctor Payment", "Doctor Commission"]);
 const CLINIC_CATS = new Set(["Clinic", "Clinic Expense", "Medical Supplies"]);
+/** Adjustment reasons that are a real loss of goods (reduce profit). */
+const WRITE_OFF = new Set(["damage", "expired", "loss", "lost", "theft"]);
 const DELIVERY_CATS = new Set(["Delivery", "Courier", "Delivery Man"]);
 export const EXPENSE_CATEGORIES = ["Rent", "Salary", "Utilities", "Marketing", "Transport", "Supplies", "Equipment", "Doctor Fee", "Clinic", "Delivery", "Courier", "Other"];
 
@@ -155,7 +158,7 @@ export async function loadSnapshot() {
     fetchAll<any>(() => db.from("products").select(`id,name,sku,category,unit,stock_quantity,purchase_price,selling_price,low_stock_threshold,is_active${P ? ",project,category_id" : ""}`).order("name").order("id")),
     fetchAll<any>(() => db.from("stock_batches").select(`id,product_id,batch_no,quantity,purchase_price,expiry_date, products(name,stock_quantity,purchase_price${pj})`).not("expiry_date", "is", null).lte("expiry_date", soon).gt("quantity", 0).order("expiry_date").order("id")),
     fetchAll<any>(() => db.from("suppliers").select("id,name,phone,balance_due").order("name").order("id")),
-    fetchAll<any>(() => db.from("sales").select(`id,invoice_no,created_at,total,paid,due,status${pj}, owner:pet_owners(full_name,phone)`).gt("due", 0.004).in("status", ["completed", "partial_refund"]).order("created_at").order("id")),
+    fetchAll<any>(() => db.from("sales").select(`id,invoice_no,created_at,total,paid,due,status${pj}, owner:pet_owners(full_name,phone)`).gt("due", 0.004).not("status", "in", "(void,refunded)").order("created_at").order("id")),
     db.rpc("account_balances", { _from: null, _to: null }),
     db.rpc("cash_shift_summary", {}),
   ]);
@@ -239,6 +242,8 @@ export function computePeriod(d: PeriodData) {
 
   // --- COGS & product / category analysis (net of returned quantity)
   let cogsSold = 0;
+  // Products sold without a purchase price: their whole price shows as profit.
+  const noCost = new Map<string, { name: string; qty: number; revenue: number }>();
   const saleById = new Map(live.map((s: any) => [s.id, s]));
   const products = new Map<string, { key: string; name: string; category: string; qty: number; revenue: number; cost: number }>();
   for (const it of d.items) {
@@ -254,6 +259,11 @@ export function computePeriod(d: PeriodData) {
     const factor = sub > 0 ? Math.max(0, Math.min(1, grossOf(s) / sub)) : 1; // spread invoice discount
     const rev = q > 0 ? n(it.line_total) * (netQ / q) * factor : 0;
     const key = it.product_id ?? `svc:${it.name}`;
+    if (it.product_id && unitCost(it) <= 0 && netQ > 0) {
+      const m = noCost.get(it.product_id) ?? { name: it.name, qty: 0, revenue: 0 };
+      m.qty += netQ; m.revenue += rev;
+      noCost.set(it.product_id, m);
+    }
     const p = products.get(key) ?? { key, name: it.name, category: it.product_id ? ((it.products?.category_id && d.catNames.get(it.products.category_id)) || catLabel(it.products?.category)) : isClinic(it.sale_id) ? "Clinic service" : "Service", qty: 0, revenue: 0, cost: 0 };
     p.qty += netQ;
     p.revenue += rev;
@@ -317,8 +327,11 @@ export function computePeriod(d: PeriodData) {
   }
   const supplierPaid = d.supplierPayments.reduce((a: number, p: any) => a + n(p.amount), 0);
 
-  // --- Stock adjustments (write-offs / found)
-  let stockLoss = 0, stockFound = 0;
+  // --- Stock adjustments
+  // Only goods really lost (damaged / expired / lost) reduce profit. Corrections
+  // (Edit product, stock count, opening stock) and "found" only fix the stock
+  // number — counting them as profit made profit look far higher than it was.
+  let stockLoss = 0, stockFound = 0, stockCorrection = 0;
   const adjByReason: Record<string, { qty: number; value: number }> = {};
   for (const a of d.adjustments) {
     const q = n(a.quantity_change);
@@ -326,7 +339,9 @@ export function computePeriod(d: PeriodData) {
     const k = String(a.reason);
     adjByReason[k] = adjByReason[k] ?? { qty: 0, value: 0 };
     adjByReason[k].qty += q; adjByReason[k].value += v;
-    if (q < 0) stockLoss += -v; else stockFound += v;
+    if (q < 0 && WRITE_OFF.has(k)) stockLoss += -v;
+    else if (q > 0 && k === "found") stockFound += v;
+    else stockCorrection += v;
   }
 
   // --- Delivery
@@ -386,7 +401,7 @@ export function computePeriod(d: PeriodData) {
   const shopNetSales = netSales - clinicNetRevenue;
 
   // --- Profit
-  const netProfit = grossProfit + delivery.net - opex - stockLoss + stockFound;
+  const netProfit = grossProfit + delivery.net - opex - stockLoss;
 
   // Daily rows finalised
   const dailyRows = [...daily.values()]
@@ -408,7 +423,7 @@ export function computePeriod(d: PeriodData) {
     collected, collectedGroups: groupMethods(collected), refundsPaid,
     opex, opexRows, expenseCategories, expByMethod, doctorPay, clinicExp, deliveryExp,
     purchases: { total: purchaseTotal, returns: purchaseReturnTotal, net: purchaseTotal - purchaseReturnTotal, count: d.purchases.length, bySupplier: [...bySupplier.values()].sort((a, b) => b.total - a.total), supplierPaid },
-    stockAdj: { loss: stockLoss, found: stockFound, byReason: adjByReason },
+    stockAdj: { loss: stockLoss, found: stockFound, correction: stockCorrection, byReason: adjByReason },
     returns: { count: returnCount, cancelCount, returnedGoods, restockedValue, notRestockedValue, refundByMethod, rows: returnRows },
     delivery: {
       ...delivery, local: stageCount(local), courier: stageCount(courier), agents: agentRows,
@@ -419,6 +434,7 @@ export function computePeriod(d: PeriodData) {
     clinic: { consultations, paidConsult, unpaidConsult, freeConsult, feeTotal, feeCollected, apptCancelled, doctors: doctorRows, revenue: clinicNetRevenue, expenses: clinicExp + doctorPay, net: clinicNetRevenue - clinicExp - doctorPay, visits: d.visits, prescriptions: d.prescriptions },
     flows: d.flows,
     products: productRows,
+    noCost: [...noCost.values()].sort((a, b) => b.revenue - a.revenue),
     categories: categoryRows,
     daily: dailyRows,
     raw: { live, dead, shipments: ships, purchases: d.purchases },
@@ -477,6 +493,10 @@ export const changePct = (cur: number, prev: number) => (Math.abs(prev) < 0.005 
 export function buildInsights(c: Computed, p: Computed | null, snap: ReturnType<typeof computeSnapshot> | null) {
   const out: { tone: "good" | "warn" | "bad" | "info"; text: string }[] = [];
   const money = (v: number) => `৳${Math.round(v).toLocaleString("en-BD")}`;
+  if (c.noCost.length) {
+    const rev = c.noCost.reduce((t, x) => t + x.revenue, 0);
+    out.push({ tone: "bad", text: `${c.noCost.length} product(s) were sold without a purchase price (${money(rev)} of sales counted as full profit). Set their purchase price in Inventory — reports fix themselves. E.g. ${c.noCost.slice(0, 3).map((x) => x.name).join(", ")}.` });
+  }
   if (p) {
     const ch = changePct(c.sales.netSales, p.sales.netSales);
     if (ch != null) out.push({ tone: ch >= 0 ? "good" : "warn", text: `Net sales ${ch >= 0 ? "up" : "down"} ${Math.abs(ch).toFixed(1)}% vs previous period (${money(p.sales.netSales)} → ${money(c.sales.netSales)}).` });

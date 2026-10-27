@@ -25,7 +25,6 @@ export function profitLines(c: Computed) {
     { label: "− Actual delivery cost", value: -c.delivery.cost },
     { label: "− Operating expenses", value: -c.opex },
     { label: "− Stock written off (damaged / expired / lost)", value: -c.stockAdj.loss },
-    { label: "+ Stock found", value: c.stockAdj.found },
     { label: "Net profit", value: c.netProfit, strong: true },
   ];
 }

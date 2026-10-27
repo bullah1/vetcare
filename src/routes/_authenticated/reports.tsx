@@ -15,7 +15,9 @@ import { DueLedgerReport } from "@/components/DueLedgerReport";
 import { AuditReport } from "@/components/AuditReport";
 import { fetchAll } from "@/lib/fetch-all";
 import { dayRangeISO } from "@/lib/sales-ledger";
-import { dhakaDayKey, shiftDay, summarizeSales } from "@/lib/sales-summary";
+import { dhakaDayKey, shiftDay } from "@/lib/sales-summary";
+import { useQuery } from "@tanstack/react-query";
+import { computePeriod, isPurchaseExpense, loadPeriod } from "@/lib/business-report";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/reports")({
@@ -76,7 +78,21 @@ function ReportsPage() {
     return () => { active = false; };
   }, [from, to]);
 
-  const summary = useMemo(() => summarizeSales(sales, items, returns, from, to), [sales, items, returns, from, to]);
+  // Sales, returns and cost of goods come from the same engine as the Business
+  // Report, so this page, the Dashboard and the Analysis page always agree.
+  const engineQ = useQuery({ queryKey: ["business-report", from, to], queryFn: () => loadPeriod({ from, to }), staleTime: 60_000 });
+  const summary = useMemo(() => {
+    const daily = new Map<string, { gross: number; refund: number; rev: number; cogs: number }>();
+    const totals = { gross: 0, refund: 0, rev: 0, cogs: 0 };
+    if (engineQ.data) {
+      for (const r of computePeriod(engineQ.data).daily) {
+        const row = { gross: r.sales, refund: r.reversals, rev: r.net, cogs: r.cogs };
+        daily.set(r.day, row);
+        totals.gross += row.gross; totals.refund += row.refund; totals.rev += row.rev; totals.cogs += row.cogs;
+      }
+    }
+    return { daily, totals };
+  }, [engineQ.data]);
   const liveItems = items;
 
   // Invoice-level discount is not stored on the line items, so spread it across
@@ -110,6 +126,7 @@ function ReportsPage() {
     summary.daily.forEach((v, day) => m.set(day, { ...v, purch: 0, opex: 0 }));
     expenses.forEach(e => {
       if (e.expense_date < from || e.expense_date > to) return;
+      if (isPurchaseExpense(e)) return; // purchases are stock, not expense
       const cur = m.get(e.expense_date) || blank();
       cur.opex += Number(e.amount); m.set(e.expense_date, cur);
     });
@@ -123,7 +140,7 @@ function ReportsPage() {
 
   const expenseByCategory = useMemo(() => {
     const m = new Map<string, number>();
-    expenses.forEach(e => m.set(e.category, (m.get(e.category) || 0) + Number(e.amount)));
+    expenses.filter((e) => !isPurchaseExpense(e)).forEach(e => m.set(e.category, (m.get(e.category) || 0) + Number(e.amount)));
     return Array.from(m.entries()).map(([category, amount]) => ({ category, amount }))
       .sort((a, b) => b.amount - a.amount);
   }, [expenses]);
@@ -257,9 +274,9 @@ function ReportsPage() {
 
       {loading && <p role="status" className="mb-3 text-sm text-muted-foreground">Loading report…</p>}
       <div aria-busy={loading} className="mb-6 grid min-w-0 grid-cols-2 gap-2 sm:gap-4 md:grid-cols-3 xl:grid-cols-5">
-        <Card className="border-2 border-primary"><CardContent className="p-3 sm:p-4"><div className="text-xs font-semibold text-primary">Net Sales</div><div className={`break-words text-xl font-bold sm:text-3xl ${totals.rev >= 0 ? "text-primary" : "text-destructive"}`}>{fmt(totals.rev)}</div><div className="mt-1 text-[11px] text-muted-foreground">refund-এর পর যা আছে (sales − refund)</div></CardContent></Card>
+        <Card className="border-2 border-primary"><CardContent className="p-3 sm:p-4"><div className="text-xs font-semibold text-primary">Net Sales</div><div className={`break-words text-xl font-bold sm:text-3xl ${totals.rev >= 0 ? "text-primary" : "text-destructive"}`}>{fmt(totals.rev)}</div><div className="mt-1 text-[11px] text-muted-foreground">after returns (sales − refund)</div></CardContent></Card>
         <Card><CardContent className="p-3 sm:p-4"><div className="text-xs text-muted-foreground">Invoice Sales</div><div className="break-words text-lg font-semibold sm:text-2xl">{fmt(totals.grossSell)}</div><div className="mt-1 text-[11px] text-muted-foreground">invoices raised in range</div></CardContent></Card>
-        <Card><CardContent className="p-3 sm:p-4"><div className="text-xs text-muted-foreground">Refund</div><div className="break-words text-lg font-semibold text-destructive sm:text-2xl">−{fmt(totals.refunds)}</div><div className="mt-1 text-[11px] text-muted-foreground">returns processed in range</div></CardContent></Card>
+        <Card><CardContent className="p-3 sm:p-4"><div className="text-xs text-muted-foreground">Refund</div><div className="break-words text-lg font-semibold text-destructive sm:text-2xl">{totals.refunds > 0 ? "−" : ""}{fmt(totals.refunds)}</div><div className="mt-1 text-[11px] text-muted-foreground">returns processed in range</div></CardContent></Card>
 
         <Card><CardContent className="p-3 sm:p-4"><div className="text-xs text-muted-foreground">Purchase Cost (sold)</div><div className="break-words text-lg font-semibold text-amber-600 sm:text-2xl">{fmt(totals.cogs)}</div></CardContent></Card>
         <Card><CardContent className="p-3 sm:p-4"><div className="text-xs text-muted-foreground">Gross Profit</div><div className={`break-words text-lg font-semibold sm:text-2xl ${totals.gross >= 0 ? "text-emerald-600" : "text-destructive"}`}>{fmt(totals.gross)}</div><div className="mt-1 text-[11px] text-muted-foreground">sell − purchase cost</div></CardContent></Card>

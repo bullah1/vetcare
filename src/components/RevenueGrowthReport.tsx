@@ -197,9 +197,9 @@ export function RevenueGrowthReport({
             </TableBody>
           </Table>
           <p className="mt-3 text-xs text-muted-foreground">
-            Revenue = invoice sales − refund (P&L-এর মতোই)। Growth % = ঠিক আগের {label.toLowerCase()}-এর তুলনায় পরিবর্তন; আগের {label.toLowerCase()} ০ হলে "—"।
-            Avg per {label.toLowerCase()} = মোট revenue ÷ রেঞ্জের সব {label.toLowerCase()} (বিক্রি না হওয়া দিনও গোনা হয়)।
-            Trend = প্রথম থেকে শেষ active {label.toLowerCase()} পর্যন্ত compound growth rate, তাই একদিনের লাফ হিসাব ফুলিয়ে দেয় না।
+            Revenue = invoice sales − refund (same as the P&L). Growth % = change vs the previous {label.toLowerCase()}; "—" when the previous {label.toLowerCase()} was 0.
+            Avg per {label.toLowerCase()} = total revenue ÷ every {label.toLowerCase()} in the range (days with no sales count too).
+            Trend = compound growth from the first to the last active {label.toLowerCase()}, so one big day does not inflate it.
             Median move = {stats.median === null ? "—" : pct(stats.median)}.
           </p>
         </CardContent>

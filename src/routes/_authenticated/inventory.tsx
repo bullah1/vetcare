@@ -198,7 +198,8 @@ function ProductsTab() {
       stockFilter === "all" ||
       (stockFilter === "low" && stock > 0 && stock <= threshold) ||
       (stockFilter === "out" && stock <= 0) ||
-      (stockFilter === "in" && stock > threshold);
+      (stockFilter === "in" && stock > threshold) ||
+      (stockFilter === "nocost" && !(Number(p.purchase_price) > 0));
     return matchesSearch && matchesCategory && matchesStock;
   });
 
@@ -284,6 +285,7 @@ function ProductsTab() {
               { value: "low", label: `Low stock (${lowStockCount})` },
               { value: "out", label: `Out of stock (${outCount})` },
               { value: "in", label: "In stock" },
+              { value: "nocost", label: `No purchase price (${products.filter((p) => inProject(p) && p.is_active && !(Number(p.purchase_price) > 0)).length})` },
             ],
           },
         ]}
@@ -604,7 +606,7 @@ function ProductsTab() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete product?</AlertDialogTitle>
             <AlertDialogDescription>
-              "{deleting?.name}" স্থায়ীভাবে মুছে যাবে। যদি এই প্রোডাক্টের sales/purchase history থাকে, সেটি মোছা যাবে না — সেক্ষেত্রে প্রোডাক্টটি "Inactive" হিসেবে চিহ্নিত হবে।
+              "{deleting?.name}" will be deleted permanently. If it has sales or purchase history it cannot be deleted — it will be marked "Inactive" instead.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
