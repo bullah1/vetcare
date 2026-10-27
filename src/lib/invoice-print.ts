@@ -1,6 +1,7 @@
 // Shared invoice printing utilities used by POS, Sales History and the
 // SalesHistory drawer. Keeps every printed sale invoice visually consistent.
 import { toast } from "sonner";
+import { brandFor, licenseLabel } from "@/lib/projects";
 import { getClinic, DEFAULT_CLINIC } from "@/lib/clinic-settings";
 
 // Kept for legacy imports; live values come from getClinic() at print time.
@@ -41,6 +42,8 @@ export type Receipt = {
   prevDue?: { before: number; paid: number; after: number } | null;
   /** A held / pending bill (not a sale yet): printed as "PENDING BILL — UNPAID". */
   pending?: { channel?: string | null } | null;
+  /** Which project's header to print: "pcv" Pet Care Vet (default) or "ss" Sasthya Seba. */
+  project?: string | null;
 };
 
 const PENDING_NOTE = "This is not a final invoice. The final invoice is given after payment. Prices may change until then.";
@@ -143,7 +146,7 @@ const money = (n: number) => `${getClinic().currency} ${Number(n || 0).toFixed(2
 // Build a WhatsApp-friendly plain text invoice summary and open wa.me.
 // Uses the same clinic branding + item/payment breakdown as the printed invoice.
 export function shareInvoiceOnWhatsApp(r: Receipt, phoneOverride?: string, targetWindow?: Window | null) {
-  const CLINIC = getClinic();
+  const CLINIC = brandFor(r.project);
   const rawPhone = (phoneOverride ?? r.owner?.phone ?? "").replace(/[^\d]/g, "");
   // Assume Bangladesh if a leading 0 is given (01XXXXXXXXX -> 8801XXXXXXXXX)
   const phone = rawPhone.startsWith("0") ? `88${rawPhone}` : rawPhone;
@@ -153,7 +156,7 @@ export function shareInvoiceOnWhatsApp(r: Receipt, phoneOverride?: string, targe
 
   const lines: string[] = [];
   lines.push(`*${CLINIC.name}*`);
-  lines.push(CLINIC.tagline);
+  if (CLINIC.tagline) lines.push(CLINIC.tagline);
   lines.push(`${CLINIC.address}`);
   lines.push(`${CLINIC.phone}`);
   lines.push("");
@@ -223,7 +226,7 @@ function paymentSummary(r: Receipt): string {
 
 /** `targetWindow`: a window opened beforehand (lets callers load data first without a pop-up block). */
 export function printInvoice(r: Receipt, targetWindow?: Window | null) {
-  const CLINIC = getClinic();
+  const CLINIC = brandFor(r.project);
   const issued = new Date(r.issued_at);
   const printedAt = new Date();
   const rows =
@@ -315,12 +318,12 @@ ${r.pending ? '<div class="pending-mark">PENDING</div>' : ""}
   <header>
     <div class="brand">
       <h1>${escapeHtml(CLINIC.name)}</h1>
-      <div class="tag">${escapeHtml(CLINIC.tagline)}</div>
+      ${CLINIC.tagline ? `<div class="tag">${escapeHtml(CLINIC.tagline)}</div>` : ""}
       <div class="addr">
         ${escapeHtml(CLINIC.address)}<br>
-        Tel: ${escapeHtml(CLINIC.phone)} · ${escapeHtml(CLINIC.email)} · ${escapeHtml(CLINIC.website)}
+        ${[`Tel: ${CLINIC.phone}`, CLINIC.email, CLINIC.website].filter(Boolean).map(escapeHtml).join(" · ")}
       </div>
-      <div class="lic">Clinic License: ${escapeHtml(CLINIC.license)}</div>
+      ${CLINIC.license ? `<div class="lic">${licenseLabel(r.project)}: ${escapeHtml(CLINIC.license)}</div>` : ""}
     </div>
     <div>
       <div class="doc-title"${r.pending ? ' style="color:#b91c1c"' : ""}>${r.pending ? "Pending Bill" : r.delivery ? "Delivery Invoice" : "Tax Invoice"}</div>
@@ -481,7 +484,7 @@ export function saveThermalSettings(s: ThermalSettings) {
 
 /** `targetWindow`: a window opened beforehand (inside the click), so async callers are not pop-up blocked. */
 export function printThermal(r: Receipt, override?: Partial<ThermalSettings>, targetWindow?: Window | null) {
-  const CLINIC = getClinic();
+  const CLINIC = brandFor(r.project);
   const s: ThermalSettings = { ...getThermalSettings(), ...(override ?? {}) };
   const issued = new Date(r.issued_at);
   // Printable width = roll width + user fine-tune. Content is padded inside it,
@@ -513,9 +516,9 @@ export function printThermal(r: Receipt, override?: Partial<ThermalSettings>, ta
   const headerBlock = `
   <div class="center hdr">
     <h1>${escapeHtml(CLINIC.name)}</h1>
-    ${s.showTagline ? `<div class="tag">${escapeHtml(CLINIC.tagline)}</div>` : ""}
+    ${s.showTagline && CLINIC.tagline ? `<div class="tag">${escapeHtml(CLINIC.tagline)}</div>` : ""}
     <div class="addr">${escapeHtml(CLINIC.address)}<br>Tel: ${escapeHtml(CLINIC.phone)}</div>
-    ${s.showLicense ? `<div class="addr">Lic: ${escapeHtml(CLINIC.license)}</div>` : ""}
+    ${s.showLicense && CLINIC.license ? `<div class="addr">${r.project === "ss" ? "DL" : "Lic"}: ${escapeHtml(CLINIC.license)}</div>` : ""}
   </div>
   <div class="sep"></div>
   ${r.pending ? `<div class="center"><b>*** PENDING BILL — UNPAID ***</b></div>${r.pending.channel ? `<div class="center">${escapeHtml(r.pending.channel)}</div>` : ""}<div class="sep"></div>` : ""}

@@ -31,6 +31,8 @@ export type HeldBill = {
   converted_sale_id: string | null;
   created_at: string;
   updated_at: string;
+  /** "pcv" (default) or "ss" — the project the bill will be made for. */
+  project?: string | null;
 };
 
 /** Channels a pending bill can come from. */
@@ -84,6 +86,8 @@ export type SaveHeldBillInput = {
   discount: number;
   note: string | null;
   channel: string;
+  /** Project of the bill; Pet Care Vet when not given (works before the projects update). */
+  project?: string;
 };
 
 function lineTotals(items: HeldBillItem[]) {
@@ -121,7 +125,8 @@ export async function saveHeldBill(input: SaveHeldBillInput) {
         note: input.note,
         channel: input.channel,
         created_by: user.user?.id ?? null,
-      })
+        ...(input.project && input.project !== "pcv" ? { project: input.project } : {}),
+      } as any)
       .select("*")
       .single();
     if (!error) return data as unknown as HeldBill;
@@ -176,7 +181,8 @@ export async function updateHeldBill(id: string, input: SaveHeldBillInput) {
       note: input.note,
       channel: input.channel,
       status: "pending",
-    })
+      ...(input.project && input.project !== "pcv" ? { project: input.project } : {}),
+    } as any)
     .eq("id", id)
     .select("*")
     .single();
@@ -204,6 +210,7 @@ export async function heldBillReceipt(bill: HeldBill): Promise<import("@/lib/inv
     }
   }
   return {
+    project: bill.project ?? "pcv",
     invoice_no: bill.bill_no,
     subtotal: Number(bill.subtotal) || items.reduce((a, i) => a + i.line_total - i.tax, 0),
     tax,

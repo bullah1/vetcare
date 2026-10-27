@@ -7,6 +7,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { AlertTriangle, CheckCircle2, Download, FileUp, Upload } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { useProductCategories } from "@/lib/product-categories";
+import { PROJECTS, type Project } from "@/lib/projects";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -57,6 +59,8 @@ const normHead = (h: string) => ALIASES[h.trim().toLowerCase().replace(/\s*\(.*?
 type Row = {
   line: number;
   name: string; sku: string | null; barcode: string | null; category: string; unit: string | null;
+  /** Category cell as typed; legacyOk = it matched one of the older fixed categories. */
+  catText: string; legacyOk: boolean; categoryId?: string | null; catLabel?: string;
   purchase_price: number; selling_price: number; wholesale_price: number | null; min_selling_price: number | null;
   tax_percent: number; stock_quantity: number; low_stock_threshold: number; description: string | null;
   is_active: boolean;
@@ -113,6 +117,10 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
   const [sheet, setSheet] = useState("");
   const [unknownHeads, setUnknownHeads] = useState<string[]>([]);
   const [updateExisting, setUpdateExisting] = useState(true);
+  const { available: hasCats, cats } = useProductCategories();
+  const [project, setProject] = useState<Project>(() => {
+    try { return localStorage.getItem("inventory.project") === "ss" ? "ss" : "pcv"; } catch { return "pcv"; }
+  });
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<{ created: number; updated: number; skipped: number; failed: { line: number; name: string; error: string }[] } | null>(null);
@@ -151,9 +159,20 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
         const other = index.byBarcode.get(k);
         if (other && (!m || other.id !== m.id)) errors.push("Barcode belongs to another product");
       }
-      return { ...r, errors, matchId: m?.id ?? null, matchBy: by };
+      // Category: a category name (any project) or an older word (food, medicine…)
+      // in the project chosen above.
+      let categoryId: string | null = null, catLabel = r.category.replace(/_/g, " "), category = r.category;
+      if (hasCats) {
+        const t = r.catText.toLowerCase();
+        const named = t ? (cats.find((c) => c.project === project && c.name.toLowerCase() === t) ?? cats.find((c) => c.name.toLowerCase() === t)) : undefined;
+        const inProj = cats.filter((c) => c.project === project && c.is_active);
+        const pick = named ?? (r.legacyOk ? (inProj.find((c) => c.legacy_category === r.category) ?? inProj[0]) : undefined);
+        if (pick) { categoryId = pick.id; category = pick.legacy_category; catLabel = `${pick.name}${pick.project === "ss" ? " (SS)" : ""}`; }
+        else errors.push(`Unknown category "${r.catText}"`);
+      } else if (!r.legacyOk) errors.push(`Unknown category "${r.catText}"`);
+      return { ...r, category, categoryId, catLabel, errors, matchId: m?.id ?? null, matchBy: by };
     });
-  }, [raw, index]);
+  }, [raw, index, hasCats, cats, project]);
 
   const counts = useMemo(() => ({
     total: rows.length,
@@ -200,7 +219,7 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
         const sell = num(get("Selling price"));
         if (sell == null) errors.push("Selling price is empty"); else if (Number.isNaN(sell) || sell < 0) errors.push("Selling price is not a number");
         const cat = toCategory(String(get("Category") ?? ""));
-        if (!cat) errors.push(`Unknown category "${String(get("Category"))}"`);
+        // Unknown words are checked again against the category list (see rows below).
         const n = (k: (typeof HEADERS)[number], label: string) => {
           const v = num(get(k));
           if (v != null && (Number.isNaN(v) || v < 0)) { errors.push(`${label} is not a valid number`); return null; }
@@ -218,7 +237,7 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
         const statusCol = head.findIndex((h) => h.trim().toLowerCase() === "status");
         const status = statusCol >= 0 ? String(cells[statusCol] ?? "").trim().toLowerCase() : "";
         out.push({
-          line: i + 2, name, sku: s("SKU"), barcode: s("Barcode"), category: cat ?? "other", unit: s("Unit") ?? st.unit ?? "pcs",
+          line: i + 2, name, sku: s("SKU"), barcode: s("Barcode"), category: cat ?? "other", catText: String(get("Category") ?? "").trim(), legacyOk: !!cat, unit: s("Unit") ?? st.unit ?? "pcs",
           is_active: !(status === "inactive" || status === "disabled" || status === "no"), notes,
           purchase_price: purchase ?? 0, selling_price: sell != null && !Number.isNaN(sell) ? sell : 0,
           wholesale_price: wholesale, min_selling_price: minP,
@@ -242,8 +261,11 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
     let created = 0, updated = 0, done = 0;
     // Wholesale / minimum price columns may not exist on an older database.
     let b2bCols = true;
+    // An existing product keeps its category when the cell is empty.
+    const keepCat = (r: Row) => !!r.matchId && !r.catText;
     const base = (r: Row) => ({
-      name: r.name, sku: r.sku, barcode: r.barcode, category: r.category, unit: r.unit,
+      name: r.name, sku: r.sku, barcode: r.barcode, unit: r.unit,
+      ...(keepCat(r) ? {} : { category: r.category, ...(r.categoryId ? { category_id: r.categoryId } : {}) }),
       purchase_price: r.purchase_price, selling_price: r.selling_price, tax_percent: r.tax_percent,
       low_stock_threshold: r.low_stock_threshold, ...(r.description ? { description: r.description } : {}),
     });
@@ -349,6 +371,17 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
             {unknownHeads.length > 0 && (
               <p className="text-xs text-amber-700">Ignored columns: {unknownHeads.join(", ")}</p>
             )}
+            {hasCats && (
+              <div className="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-sm">
+                <span>Upload to project<span className="block text-xs text-muted-foreground">Used when the Category cell is empty or a general word (medicine, food…). A category name from your list always wins.</span></span>
+                <div className="ml-auto inline-flex rounded-md border p-0.5">
+                  {PROJECTS.map((p) => (
+                    <button key={p.key} type="button" disabled={busy} onClick={() => setProject(p.key)}
+                      className={`rounded px-3 py-1 text-sm ${project === p.key ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>{p.label}</button>
+                  ))}
+                </div>
+              </div>
+            )}
             <label className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm">
               <span>Update products that are already in the list<span className="block text-xs text-muted-foreground">Name, prices and details are updated. Their stock is not changed.</span></span>
               <Switch checked={updateExisting} onCheckedChange={setUpdateExisting} disabled={busy} />
@@ -375,7 +408,7 @@ export function ProductImportDialog({ open, onOpenChange, existing }: { open: bo
                         <div className="font-medium">{r.name || "—"}</div>
                         <div className="text-xs text-muted-foreground">{[r.sku, r.barcode, r.unit].filter(Boolean).join(" · ")}</div>
                       </TableCell>
-                      <TableCell className="text-xs">{r.category.replace(/_/g, " ")}</TableCell>
+                      <TableCell className="text-xs">{r.matchId && !r.catText ? <span className="text-muted-foreground">unchanged</span> : r.catLabel}</TableCell>
                       <TableCell className="text-right tabular-nums">{r.purchase_price}</TableCell>
                       <TableCell className="text-right tabular-nums font-medium">{r.selling_price}</TableCell>
                       <TableCell className="text-right text-xs tabular-nums">{r.wholesale_price ?? "—"} / {r.min_selling_price ?? "—"}</TableCell>

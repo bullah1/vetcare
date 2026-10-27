@@ -14,6 +14,7 @@ import ThermalPrinterSettings from "@/components/ThermalPrinterSettings";
 import FreshStartReset from "@/components/FreshStartReset";
 import BrandThemeSettings from "@/components/BrandThemeSettings";
 
+import { DEFAULT_SS_BRAND, getSsBrand, saveSsBrand, syncSsBrandFromServer, type ProjectBrand } from "@/lib/projects";
 import { getClinic, saveClinic, resetClinic, syncClinicFromServer, DEFAULT_CLINIC, type ClinicInfo } from "@/lib/clinic-settings";
 import { printInvoice, printThermal, testThermalReceipt } from "@/lib/invoice-print";
 
@@ -123,6 +124,7 @@ function SettingsPage() {
               />
             </CardContent>
           </Card>
+          <SsBrandCard />
         </TabsContent>
 
         <TabsContent value="invoice">
@@ -210,5 +212,46 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
       <Label>{label}</Label>
       <Input value={value} onChange={(e) => onChange(e.target.value)} />
     </div>
+  );
+}
+
+/** Header printed on Sasthya Seba (SS-…) bills. Empty fields fall back to the clinic profile. */
+function SsBrandCard() {
+  const [b, setB] = useState<ProjectBrand>(DEFAULT_SS_BRAND);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setB(getSsBrand());
+    void syncSsBrandFromServer().then(setB);
+  }, []);
+  const set = <K extends keyof ProjectBrand>(k: K, v: ProjectBrand[K]) => setB((x) => ({ ...x, [k]: v }));
+  const save = async () => {
+    setSaving(true);
+    const res = await saveSsBrand(b);
+    setSaving(false);
+    if (res.ok) toast.success("Sasthya Seba profile saved");
+    else toast.error(`Saved on this device only: ${res.error}`);
+  };
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle>Sasthya Seba profile</CardTitle>
+        <CardDescription>Printed on Sasthya Seba bills (SS-…). Leave address or phone empty to use the clinic&apos;s.</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4 md:grid-cols-2">
+        <Field label="Name" value={b.name} onChange={(v) => set("name", v)} />
+        <Field label="Tagline" value={b.tagline} onChange={(v) => set("tagline", v)} />
+        <div className="md:col-span-2">
+          <Label>Address</Label>
+          <Textarea rows={2} value={b.address} placeholder="Same as clinic" onChange={(e) => set("address", e.target.value)} />
+        </div>
+        <Field label="Phone" value={b.phone} onChange={(v) => set("phone", v)} />
+        <Field label="Drug license no." value={b.license} onChange={(v) => set("license", v)} />
+        <Field label="Email" value={b.email} onChange={(v) => set("email", v)} />
+        <Field label="Website" value={b.website} onChange={(v) => set("website", v)} />
+        <div className="md:col-span-2 flex justify-end">
+          <Button onClick={save} disabled={saving || !b.name.trim()}>{saving ? "Saving…" : "Save Sasthya Seba profile"}</Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

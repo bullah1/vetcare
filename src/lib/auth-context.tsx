@@ -3,6 +3,7 @@ import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import { ADMIN_ONLY_KEYS, IMPLIED_BY } from "@/lib/permissions";
 import { syncClinicFromServer } from "@/lib/clinic-settings";
+import { syncSsBrandFromServer } from "@/lib/projects";
 
 export type AppRole = "admin" | "doctor" | "reception" | "cashier" | "pharmacy" | "store_manager";
 
@@ -44,6 +45,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await loadAccess(data.session.user.id);
         // Pull the shared clinic/invoice settings so printed documents match on every device.
         void syncClinicFromServer();
+        void syncSsBrandFromServer();
       }
       setLoading(false);
     });

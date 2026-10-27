@@ -7,13 +7,12 @@ import { fetchReceiptDelivery } from "@/lib/deliveries";
  * (rider) or courier parcel (tracking no., COD). Read-only.
  */
 export async function fetchSaleReceipt(saleId: string): Promise<Receipt> {
-  const { data, error } = await supabase
-    .from("sales")
-    .select(
-      "id,invoice_no,created_at,total,paid,due,status,subtotal,discount,tax,notes, owner:pet_owners(full_name,phone), sale_items(name,quantity,unit_price,discount,tax,line_total,product_id), payments(method,amount,reference)",
-    )
-    .eq("id", saleId)
-    .maybeSingle();
+  const cols = "id,invoice_no,created_at,total,paid,due,status,subtotal,discount,tax,notes, owner:pet_owners(full_name,phone), sale_items(name,quantity,unit_price,discount,tax,line_total,product_id), payments(method,amount,reference)";
+  // `project` exists after the projects update; older databases print as Pet Care Vet.
+  let { data, error } = await (supabase as any).from("sales").select(`${cols},project`).eq("id", saleId).maybeSingle();
+  if (error && /project/i.test(error.message ?? "")) {
+    ({ data, error } = await supabase.from("sales").select(cols).eq("id", saleId).maybeSingle());
+  }
   if (error) throw error;
   if (!data) throw new Error("Invoice not found");
   const d = data as any;
@@ -25,6 +24,7 @@ export async function fetchSaleReceipt(saleId: string): Promise<Receipt> {
   return {
     sale_id: d.id,
     invoice_no: d.invoice_no,
+    project: d.project ?? (String(d.invoice_no ?? "").startsWith("SS-") ? "ss" : "pcv"),
     subtotal: Number(d.subtotal),
     tax: Number(d.tax),
     discount: Number(d.discount),

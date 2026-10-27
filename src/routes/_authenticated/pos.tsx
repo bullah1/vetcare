@@ -32,6 +32,7 @@ import { useAuth } from "@/lib/auth-context";
 import { HeldBillPrintMenu, openPrintWindow, printHeldBill } from "@/components/HeldBillPrintMenu";
 import { schemaMissing, withSchemaFallback } from "@/lib/schema-fallback";
 import { useEffect } from "react";
+import { PROJECTS, asProject, projectLabel, type Project } from "@/lib/projects";
 import { resolveProductImageUrl } from "@/components/ProductImageUpload";
 import ThermalPrinterSettings from "@/components/ThermalPrinterSettings";
 import { Link } from "@tanstack/react-router";
@@ -335,6 +336,8 @@ type Product = {
   low_stock_threshold: number | null; image_url: string | null;
   /** B2B price list (null = same as selling price) and the lowest price allowed without an admin. */
   wholesale_price?: number | null; min_selling_price?: number | null;
+  /** pcv = Pet Care Vet, ss = Sasthya Seba (missing on an older database = pcv). */
+  project?: string | null;
 };
 type CartLine = {
   product_id: string; name: string; unit_price: number; quantity: number; discount: number; tax_percent: number;
@@ -369,10 +372,18 @@ const CART_STORAGE_KEY = "pos-cart-draft-v1";
 
 // POS product list (also re-read right before a bill is saved, so prices are never stale).
 async function loadPosProducts(): Promise<Product[]> {
-  const base = "id,name,sku,barcode,category,selling_price,tax_percent,stock_quantity,unit,low_stock_threshold,image_url";
+  // The project column comes with the Projects SQL; before it everything is Pet Care Vet.
+  return withSchemaFallback(
+    "products.project",
+    () => loadPosProductsWith(",project"),
+    () => loadPosProductsWith(""),
+  );
+}
+async function loadPosProductsWith(extra: string): Promise<Product[]> {
+  const base = `id,name,sku,barcode,category,selling_price,tax_percent,stock_quantity,unit,low_stock_threshold,image_url${extra}`;
   // Wholesale / minimum price columns may not exist yet on an older database.
   return withSchemaFallback(
-    "products.b2b",
+    `products.b2b${extra}`,
     () => fetchAll<Product>(() => (supabase as any).from("products")
       .select(`${base},wholesale_price,min_selling_price`)
       .eq("is_active", true).order("name").order("id")),
@@ -395,6 +406,15 @@ function POSPage() {
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
   const [sheetQ, setSheetQ] = useState("");
+  // Which project this bill is for. One bill = one project (separate invoices).
+  const [project, setProjectState] = useState<Project>(() => {
+    try { return asProject(localStorage.getItem("pos.project")); } catch { return "pcv"; }
+  });
+  const addToCartRef = useRef<((p: Product) => void) | null>(null);
+  const rememberProject = (p: Project) => {
+    setProjectState(p);
+    try { localStorage.setItem("pos.project", p); } catch { /* ignore */ }
+  };
 
   // Pending Bill = bill not finalised yet (hold / online order). Resumed bills
   // become a real sale once checked out here.
@@ -426,9 +446,12 @@ function POSPage() {
       const raw = localStorage.getItem(CART_STORAGE_KEY);
       if (raw) {
         const saved = JSON.parse(raw) as {
-          cart?: CartLine[]; discount?: number; ownerId?: string; method?: string; resumedBill?: HeldBill | null;
+          cart?: CartLine[]; discount?: number; ownerId?: string; method?: string; resumedBill?: HeldBill | null; project?: string;
         };
-        if (Array.isArray(saved.cart) && saved.cart.length > 0) setCart(saved.cart);
+        if (Array.isArray(saved.cart) && saved.cart.length > 0) {
+          setCart(saved.cart);
+          if (saved.project) setProjectState(asProject(saved.project));
+        }
         if (typeof saved.discount === "number") setDiscount(saved.discount);
         if (typeof saved.ownerId === "string") setOwnerId(saved.ownerId);
         // Remember which held bill is in the cart, so holding it again after a
@@ -454,9 +477,9 @@ function POSPage() {
     }
     try {
       if (cart.length === 0) localStorage.removeItem(CART_STORAGE_KEY);
-      else localStorage.setItem(CART_STORAGE_KEY, JSON.stringify({ cart, discount, ownerId, method, resumedBill }));
+      else localStorage.setItem(CART_STORAGE_KEY, JSON.stringify({ cart, discount, ownerId, method, resumedBill, project }));
     } catch { /* storage full or unavailable */ }
-  }, [cart, discount, ownerId, method, resumedBill]);
+  }, [cart, discount, ownerId, method, resumedBill, project]);
 
   // Emptying the cart by hand ends the link to a held bill — new items added
   // afterwards are a new bill, not an edit of the old one.
@@ -477,7 +500,7 @@ function POSPage() {
     }, 50);
   };
 
-  const { data: products = [] } = useQuery({
+  const { data: allProducts = [] } = useQuery({
     queryKey: ["pos-products"],
     // Paged: the API returns at most 1000 rows per request.
     queryFn: loadPosProducts,
@@ -485,6 +508,39 @@ function POSPage() {
     gcTime: 30 * 60_000,
     refetchOnWindowFocus: false,
   });
+  // Only this project's products are shown, searched and scanned.
+  const products = useMemo(
+    () => allProducts.filter((p) => asProject(p.project) === project),
+    [allProducts, project],
+  );
+  const switchProject = (p: Project) => {
+    if (p === project) return;
+    if (cart.length > 0) {
+      toast.error(`Finish or hold this ${projectLabel(project)} bill first — one bill is for one project.`);
+      return;
+    }
+    rememberProject(p);
+    setQ("");
+    searchRef.current?.focus();
+  };
+  /** A code that belongs to the other project: switch when the cart is empty, otherwise explain. */
+  const otherProjectHit = (code: string): Product | null => {
+    const c = code.replace(/\s+/g, "").toLowerCase();
+    if (!c) return null;
+    return allProducts.find((p) => asProject(p.project) !== project
+      && ((p.barcode ?? "").replace(/\s+/g, "").toLowerCase() === c || (p.sku ?? "").replace(/\s+/g, "").toLowerCase() === c)) ?? null;
+  };
+  const handleOtherProject = (p: Product): boolean => {
+    const other = asProject(p.project);
+    if (cart.length === 0) {
+      rememberProject(other);
+      addToCartRef.current?.(p);
+      toast.info(`Switched to ${projectLabel(other)} — ${p.name.trim()} added`);
+      return true;
+    }
+    toast.error(`${p.name.trim()} is a ${projectLabel(other)} product. Finish this bill, then make a separate ${projectLabel(other)} bill.`);
+    return true;
+  };
 
   const { data: openShift } = useQuery({
     queryKey: ["pos-open-shift"],
@@ -524,7 +580,7 @@ function POSPage() {
   // Put a held bill into the cart (from the Held popup or the Pending Bills page).
   const loadHeldBill = useCallback((bill: HeldBill) => {
     const lines: CartLine[] = (bill.items ?? []).map((it) => {
-      const p = products.find((pr) => pr.id === it.product_id);
+      const p = allProducts.find((pr) => pr.id === it.product_id);
       return {
         product_id: it.product_id,
         name: it.name,
@@ -548,18 +604,19 @@ function POSPage() {
     setPaidAmount("");
     setResumedBill(bill);
     setMethod("cash");
+    rememberProject(asProject(bill.project));
     return true;
-  }, [products, can]);
+  }, [allProducts, can]);
 
   // Load a pending bill queued from the Pending Bills screen into the cart.
   const resumeTried = useRef(false);
   useEffect(() => {
-    if (resumeTried.current || products.length === 0) return;
+    if (resumeTried.current || allProducts.length === 0) return;
     resumeTried.current = true;
     const bill = takeQueuedResume();
     if (!bill) return;
     if (loadHeldBill(bill)) toast.success(`Held bill ${bill.bill_no} loaded — complete the payment to finalise it.`);
-  }, [products, loadHeldBill]);
+  }, [allProducts, loadHeldBill]);
 
   // Held bills list for the in-POS popup.
   const { data: heldBills = [], isFetching: heldLoading } = useQuery({
@@ -832,6 +889,7 @@ function POSPage() {
       }];
     });
   }, [warnStock]);
+  addToCartRef.current = addToCart;
 
   // Scanner debounce: hardware scanners often fire the same code twice (double
   // trigger / repeated Enter). Ignore an identical code within 600ms; a repeat
@@ -947,11 +1005,13 @@ function POSPage() {
     const pick = results[visibleForThis && hiRef.current >= 0 ? Math.min(hiRef.current, results.length - 1) : 0]?.p ?? null;
     if (!pick) {
       lastScanRef.current = { code: "", at: 0 };
+      const other = otherProjectHit(raw);
+      if (other) { setQ(""); handleOtherProject(other); return; }
       toast.error(`No product for "${typed.trim()}"`);
       return;
     }
     openQty(pick); // Product → Enter → Quantity pop-up → Enter
-  }, [scanMaps, codeHits, addToCart, deferredQ, cart.length, searchProducts]);
+  }, [scanMaps, codeHits, addToCart, deferredQ, cart.length, searchProducts, project, allProducts]);
 
 
 
@@ -1090,9 +1150,17 @@ function POSPage() {
       const payments = method === "due" ? [] : [{ method, amount: paid, reference: null }];
 
       const args = { _owner_id: ownerId || null, _items: items, _payments: payments, _discount: totals.discount, _notes: null };
+      const wrong = cart.find((l) => { const p = byId.get(l.product_id); return p && asProject(p.project) !== project; });
+      if (wrong) throw new Error(`${wrong.name.trim()} is not a ${projectLabel(project)} product — remove it and sell it on a separate bill.`);
+      // create_project_sale = the normal POS sale (create_pos_sale) + project and its own invoice number.
+      let { data, error } = await (supabase.rpc as any)("create_project_sale", { _project: project, ...args });
+      const noProjectFn = !!error && (error.code === "PGRST202" || /create_project_sale/.test(error.message ?? ""));
+      if (noProjectFn && project === "ss") {
+        throw new Error("Sasthya Seba bills need the Projects database update. Ask the admin to run the SQL first.");
+      }
+      if (noProjectFn) ({ data, error } = await (supabase.rpc as any)("create_pos_sale", args));
       // create_pos_sale checks who may change prices and the minimum price, and logs every change.
-      let { data, error } = await (supabase.rpc as any)("create_pos_sale", args);
-      if (error && (error.code === "PGRST202" || /create_pos_sale/.test(error.message ?? ""))) {
+      if (noProjectFn && error && (error.code === "PGRST202" || /create_pos_sale/.test(error.message ?? ""))) {
         // Older database without the B2B update: only plain prices can be sold.
         const changedPrice = cart.some((l) => l.list_price != null && Math.abs(l.unit_price - l.list_price) > 0.004);
         if (changedPrice) throw new Error("Price changes need the latest database update (B2B SQL). Ask the admin to run it.");
@@ -1104,6 +1172,7 @@ function POSPage() {
       const snapshot: Receipt = {
         sale_id: rpc.sale_id,
         invoice_no: rpc.invoice_no,
+        project,
         total: Number(rpc.total),
         paid: Number(rpc.paid),
         due: Number(rpc.due),
@@ -1203,6 +1272,7 @@ function POSPage() {
         discount,
         note: resumedBill?.note ?? null,
         channel: resumedBill?.channel ?? "counter",
+        project,
     };
     return resumedBill ? updateHeldBill(resumedBill.id, input) : saveHeldBill(input);
   };
@@ -1710,6 +1780,27 @@ function POSPage() {
         {/* Product grid */}
         <div className="min-w-0 space-y-3">
           <div className="sticky top-14 z-20 -mx-3 border-b bg-background/95 px-3 py-2 backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0">
+            <div className="mb-2 grid grid-cols-2 gap-1 rounded-lg border bg-muted/40 p-1" role="tablist" aria-label="Project">
+              {PROJECTS.map((pr) => {
+                const on = project === pr.key;
+                return (
+                  <button
+                    key={pr.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    onClick={() => switchProject(pr.key)}
+                    title={on ? `${pr.label} bill` : cart.length > 0 ? "Finish or hold this bill first" : `Switch to ${pr.label}`}
+                    className={`flex items-center justify-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${on ? "text-white shadow-sm" : "text-muted-foreground hover:bg-background hover:text-foreground"}`}
+                    style={on ? { background: pr.tone } : undefined}
+                  >
+                    <span className={`h-2 w-2 rounded-full ${on ? "bg-white" : ""}`} style={on ? undefined : { background: pr.tone }} />
+                    {pr.label}
+                    <span className={`text-xs ${on ? "text-white/80" : "opacity-70"}`}>{pr.key === "ss" ? "SS-…" : "INV-…"}</span>
+                  </button>
+                );
+              })}
+            </div>
             <div className="relative min-w-0">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -1826,7 +1917,9 @@ function POSPage() {
                   const hits = codeHits(raw);
                   if (hits.length > 1) { openDupPick(e.currentTarget.value.trim(), hits); setSheetQ(""); return; }
                   const target = hits[0] ?? sheetResults[0]?.p ?? null;
+                  const other = target ? null : otherProjectHit(raw);
                   if (target) { addToCart(target); setSheetQ(""); }
+                  else if (other) { setSheetQ(""); handleOtherProject(other); }
                   else toast.error(`No product for "${e.currentTarget.value.trim()}"`);
                 }}
                 placeholder="Add product — scan barcode or search…"
@@ -2162,6 +2255,9 @@ function POSPage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-mono text-sm font-medium">{b.bill_no}</span>
                       {inCart && <Badge variant="outline" className="text-[10px]">In cart</Badge>}
+                      {asProject(b.project) === "ss" && (
+                        <Badge className="border-transparent bg-emerald-600 text-[10px] text-white hover:bg-emerald-600">Sasthya Seba</Badge>
+                      )}
                       {b.channel && b.channel !== "counter" && (
                         <Badge variant="secondary" className="text-[10px]">{HELD_CHANNEL_LABELS[b.channel] ?? b.channel}</Badge>
                       )}

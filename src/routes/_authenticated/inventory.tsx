@@ -25,7 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -36,13 +36,15 @@ import { BarcodeLabelDialog, type LabelProduct } from "@/components/BarcodeLabel
 import { printLabelsBatch } from "@/lib/barcode-labels";
 import { refreshAppData } from "@/lib/refresh-data";
 import { fetchAll } from "@/lib/fetch-all";
+import { useProductCategories, LEGACY_CATEGORIES, LEGACY_LABEL, type ProductCategory } from "@/lib/product-categories";
+import { PROJECTS, projectLabel, type Project } from "@/lib/projects";
 
 export const Route = createFileRoute("/_authenticated/inventory")({
   head: () => ({ meta: [{ title: "Inventory — Pet Care Vet ERP" }] }),
   component: InventoryPage,
 });
 
-const CATEGORIES = ["medicine", "pet_food", "accessory", "service", "other"] as const;
+const CATEGORIES = LEGACY_CATEGORIES;
 
 function generateBarcode() {
   // CODE128-friendly: prefix + last 10 digits of timestamp + 2 random digits
@@ -109,11 +111,22 @@ type Product = {
   category: string; unit: string | null; purchase_price: number; selling_price: number;
   tax_percent: number; stock_quantity: number; low_stock_threshold: number;
   is_active: boolean; description: string | null; image_url: string | null;
+  project?: string | null; category_id?: string | null;
 };
 
 function ProductsTab() {
   const [q, setQ] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [projectFilter, setProjectFilterState] = useState<"all" | Project>(() => {
+    try { const v = localStorage.getItem("inventory.project"); return v === "pcv" || v === "ss" ? v : "all"; } catch { return "all"; }
+  });
+  const setProjectFilter = (v: "all" | Project) => {
+    setProjectFilterState(v); setCategoryFilter("all");
+    try { localStorage.setItem("inventory.project", v); } catch { /* ignore */ }
+  };
+  const [catsOpen, setCatsOpen] = useState(false);
+  const { available: hasCats, byId: catById } = useProductCategories();
+  const catName = (p: Product) => (p.category_id && catById.get(p.category_id)?.name) || LEGACY_LABEL[p.category] || p.category;
   const [stockFilter, setStockFilter] = useState<string>("all");
   const [editing, setEditing] = useState<Product | null>(null);
   const [open, setOpen] = useState(false);
@@ -158,7 +171,9 @@ function ProductsTab() {
     },
   });
 
-  const availableCategories = Array.from(new Set(products.map((p) => p.category))).sort();
+  const inProject = (p: Product) => projectFilter === "all" || (p.project ?? "pcv") === projectFilter;
+  const availableCategories = Array.from(new Set(products.filter(inProject).map(catName))).sort();
+  const projectCount = (k: Project) => products.filter((p) => (p.project ?? "pcv") === k).length;
 
   // Typo-tolerant name search; matched words are highlighted in the list.
   const searchRanges = useMemo(() => {
@@ -175,7 +190,8 @@ function ProductsTab() {
 
   const filtered = products.filter((p) => {
     const matchesSearch = !q.trim() || searchRanges.has(p.id);
-    const matchesCategory = categoryFilter === "all" || p.category === categoryFilter;
+    const matchesCategory = categoryFilter === "all" || catName(p) === categoryFilter;
+    if (!inProject(p)) return false;
     const stock = Number(p.stock_quantity);
     const threshold = Number(p.low_stock_threshold);
     const matchesStock =
@@ -208,7 +224,7 @@ function ProductsTab() {
       };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [products, selected, q, categoryFilter, stockFilter]);
+  }, [products, selected, q, categoryFilter, stockFilter, projectFilter]);
 
   return (
     <div className="space-y-4">
@@ -241,6 +257,24 @@ function ProductsTab() {
         onClear={() => { setQ(""); setCategoryFilter("all"); setStockFilter("all"); }}
       />
       <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex rounded-md border p-0.5" role="tablist" aria-label="Project">
+          {([{ key: "all", label: "All", count: products.length }, ...PROJECTS.map((p) => ({ key: p.key, label: p.label, count: projectCount(p.key) }))] as { key: "all" | Project; label: string; count: number }[]).map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={projectFilter === t.key}
+              onClick={() => setProjectFilter(t.key)}
+              className={`rounded px-3 py-1 text-sm transition-colors ${projectFilter === t.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              {t.label} <span className="opacity-70">({t.count})</span>
+            </button>
+          ))}
+        </div>
+        {hasCats && (
+          <Button variant="outline" size="sm" onClick={() => setCatsOpen(true)}>Categories</Button>
+        )}
+        {hasCats && <ManageCategoriesDialog open={catsOpen} onOpenChange={setCatsOpen} products={products} defaultProject={projectFilter === "all" ? "pcv" : projectFilter} />}
 
         <div className="ml-auto text-xs text-muted-foreground hidden sm:block">
           {filtered.length} of {products.length}
@@ -255,7 +289,8 @@ function ProductsTab() {
                 Name: p.name,
                 SKU: p.sku ?? "",
                 Barcode: p.barcode ?? "",
-                Category: p.category,
+                Project: projectLabel(p.project),
+                Category: catName(p),
                 Unit: p.unit ?? "",
                 "Purchase Price": Number(p.purchase_price),
                 "Selling Price": Number(p.selling_price),
@@ -299,7 +334,7 @@ function ProductsTab() {
           <DialogTrigger asChild>
             <Button><Plus className="h-4 w-4" /> New product</Button>
           </DialogTrigger>
-          <ProductDialog key={editing?.id ?? "new"} product={editing} onDone={() => setOpen(false)} />
+          <ProductDialog key={editing?.id ?? `new-${projectFilter}`} product={editing} defaultProject={projectFilter === "all" ? "pcv" : projectFilter} onDone={() => setOpen(false)} />
         </Dialog>
       </div>
 
@@ -361,7 +396,12 @@ function ProductsTab() {
                         {!p.is_active && <Badge variant="secondary" className="ml-1">Inactive</Badge>}
                       </div>
                     </TableCell>
-                    <TableCell><Badge variant="outline">{p.category}</Badge></TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{catName(p)}</Badge>
+                      {projectFilter === "all" && (p.project ?? "pcv") === "ss" && (
+                        <Badge className="ml-1 border-transparent bg-emerald-600 text-white hover:bg-emerald-600">SS</Badge>
+                      )}
+                    </TableCell>
                     <TableCell className="text-muted-foreground text-xs">{p.sku ?? "—"}</TableCell>
                     <TableCell className="font-mono text-[11px] text-muted-foreground">{p.barcode ?? "—"}</TableCell>
                     <TableCell className="text-right">৳ {Number(p.selling_price).toFixed(2)}</TableCell>
@@ -545,8 +585,20 @@ function QuickAdjustDialog({ product, onOpenChange }: { product: Product | null;
   );
 }
 
-function ProductDialog({ product, onDone }: { product: Product | null; onDone: () => void }) {
+function ProductDialog({ product, defaultProject = "pcv", onDone }: { product: Product | null; defaultProject?: Project; onDone: () => void }) {
   const qc = useQueryClient();
+  const { available: hasCats, cats } = useProductCategories();
+  const activeCats = cats.filter((c) => c.is_active || c.id === product?.category_id);
+  const [categoryId, setCategoryId] = useState<string>(product?.category_id ?? "");
+  // New product: first category of the project being viewed.
+  useEffect(() => {
+    if (categoryId || !hasCats || product?.category_id) return;
+    const first = activeCats.find((c) => c.project === (product ? (product.project ?? "pcv") : defaultProject)
+      && (!product || c.legacy_category === product.category)) ?? activeCats.find((c) => c.project === defaultProject);
+    if (first) setCategoryId(first.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasCats, cats.length]);
+  const pickedCat = cats.find((c) => c.id === categoryId);
   const [form, setForm] = useState({
     name: product?.name ?? "",
     sku: product?.sku ?? "",
@@ -591,6 +643,12 @@ function ProductDialog({ product, onDone }: { product: Product | null; onDone: (
         dose_form: form.is_prescribable ? form.dose_form : null,
         dose_unit: form.is_prescribable && form.dose_unit.trim() ? form.dose_unit.trim() : null,
       };
+      if (hasCats) {
+        if (!pickedCat) throw new Error("Choose a category");
+        // The category decides the project (set on the server too).
+        payload.category_id = pickedCat.id;
+        payload.category = pickedCat.legacy_category;
+      }
       const w = wholesale.trim() === "" ? null : Number(wholesale);
       const mn = minPrice.trim() === "" ? null : Number(minPrice);
       if (w != null && !(w >= 0)) throw new Error("Wholesale price must be 0 or more");
@@ -648,10 +706,31 @@ function ProductDialog({ product, onDone }: { product: Product | null; onDone: (
         </div>
         <div className="space-y-2">
           <Label>Category</Label>
-          <Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>{CATEGORIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-          </Select>
+          {hasCats ? (
+            <>
+              <Select value={categoryId} onValueChange={setCategoryId}>
+                <SelectTrigger aria-label="Category"><SelectValue placeholder="Choose category" /></SelectTrigger>
+                <SelectContent>
+                  {PROJECTS.map((pr) => {
+                    const list = activeCats.filter((c) => c.project === pr.key);
+                    if (list.length === 0) return null;
+                    return (
+                      <SelectGroup key={pr.key}>
+                        <SelectLabel>{pr.label}</SelectLabel>
+                        {list.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                      </SelectGroup>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              {pickedCat && <p className="text-xs text-muted-foreground">Project: {projectLabel(pickedCat.project)}</p>}
+            </>
+          ) : (
+            <Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>{CATEGORIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+            </Select>
+          )}
         </div>
         <div className="space-y-2">
           <Label>Unit</Label>
@@ -1313,3 +1392,132 @@ function BulkPurchaseDialog({ products, suppliers, onDone }: { products: any[]; 
   );
 }
 
+
+/* -------------------- Categories (per project) -------------------- */
+
+function ManageCategoriesDialog({ open, onOpenChange, products, defaultProject }: { open: boolean; onOpenChange: (v: boolean) => void; products: Product[]; defaultProject: Project }) {
+  const qc = useQueryClient();
+  const { cats } = useProductCategories();
+  const [name, setName] = useState("");
+  const [project, setProject] = useState<Project>(defaultProject);
+  const [kind, setKind] = useState<string>("medicine");
+  useEffect(() => { if (open) setProject(defaultProject); }, [open, defaultProject]);
+  const [busy, setBusy] = useState(false);
+  const [names, setNames] = useState<Record<string, string>>({});
+  const used = (id: string) => products.filter((p) => p.category_id === id).length;
+
+  const done = (msg: string) => {
+    toast.success(msg);
+    qc.invalidateQueries({ queryKey: ["product-categories"] });
+    qc.invalidateQueries({ queryKey: ["products"] });
+    qc.invalidateQueries({ queryKey: ["pos-products"] });
+  };
+  const run = async (fn: () => Promise<{ error: { message: string } | null }>, msg: string) => {
+    setBusy(true);
+    try {
+      const { error } = await fn();
+      if (error) throw new Error(/duplicate|unique/i.test(error.message) ? "That category already exists in this project" : error.message);
+      done(msg);
+      return true;
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const db = () => (supabase as any).from("product_categories");
+
+  const add = async () => {
+    const n = name.trim();
+    if (!n) { toast.error("Enter a category name"); return; }
+    const sort = Math.max(0, ...cats.filter((c) => c.project === project).map((c) => c.sort)) + 1;
+    if (await run(() => db().insert({ name: n, project, legacy_category: kind, sort }), `Category "${n}" added to ${projectLabel(project)}`)) setName("");
+  };
+  const rename = (c: ProductCategory) => {
+    const n = (names[c.id] ?? c.name).trim();
+    if (!n || n === c.name) return;
+    void run(() => db().update({ name: n }).eq("id", c.id), "Category renamed");
+  };
+  const move = (c: ProductCategory, to: Project) => {
+    const count = used(c.id);
+    if (count > 0 && !confirm(`Move "${c.name}" and its ${count} products to ${projectLabel(to)}?`)) return;
+    void run(() => db().update({ project: to }).eq("id", c.id), `"${c.name}" moved to ${projectLabel(to)}`);
+  };
+  const remove = (c: ProductCategory) => {
+    const count = used(c.id);
+    if (count > 0) {
+      // Products keep their project; hide the category instead of leaving them without one.
+      void run(() => db().update({ is_active: !c.is_active }).eq("id", c.id), c.is_active ? `"${c.name}" hidden` : `"${c.name}" shown again`);
+      return;
+    }
+    if (!confirm(`Delete category "${c.name}"?`)) return;
+    void run(() => db().delete().eq("id", c.id), "Category deleted");
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader><DialogTitle>Categories</DialogTitle></DialogHeader>
+        <p className="text-sm text-muted-foreground -mt-2">
+          A product's category decides its project. Sasthya Seba products are sold on Sasthya Seba bills (SS-… invoices).
+        </p>
+        <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto_auto] items-end rounded-md border p-3">
+          <div className="space-y-1">
+            <Label htmlFor="cat-name">New category</Label>
+            <Input id="cat-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Tablet" onKeyDown={(e) => { if (e.key === "Enter") void add(); }} />
+          </div>
+          <div className="space-y-1">
+            <Label>Project</Label>
+            <Select value={project} onValueChange={(v) => setProject(v as Project)}>
+              <SelectTrigger className="w-40" aria-label="Project"><SelectValue /></SelectTrigger>
+              <SelectContent>{PROJECTS.map((p) => <SelectItem key={p.key} value={p.key}>{p.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label>Type</Label>
+            <Select value={kind} onValueChange={setKind}>
+              <SelectTrigger className="w-32" aria-label="Type"><SelectValue /></SelectTrigger>
+              <SelectContent>{LEGACY_CATEGORIES.map((c) => <SelectItem key={c} value={c}>{LEGACY_LABEL[c]}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <Button onClick={() => void add()} disabled={busy}><Plus className="h-4 w-4" /> Add</Button>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 max-h-[55vh] overflow-y-auto">
+          {PROJECTS.map((pr) => (
+            <div key={pr.key} className="space-y-2">
+              <div className="flex items-center gap-2 font-medium">
+                <span className="h-2.5 w-2.5 rounded-full" style={{ background: pr.tone }} />
+                {pr.label}
+              </div>
+              {cats.filter((c) => c.project === pr.key).map((c) => (
+                <div key={c.id} className={`flex items-center gap-1 ${c.is_active ? "" : "opacity-50"}`}>
+                  <Input
+                    className="h-8"
+                    aria-label={`Category name ${c.name}`}
+                    value={names[c.id] ?? c.name}
+                    onChange={(e) => setNames({ ...names, [c.id]: e.target.value })}
+                    onBlur={() => rename(c)}
+                    onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                  />
+                  <span className="w-8 text-right text-xs text-muted-foreground" title="Products">{used(c.id)}</span>
+                  <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" disabled={busy}
+                    title={`Move to ${projectLabel(pr.key === "pcv" ? "ss" : "pcv")}`}
+                    onClick={() => move(c, pr.key === "pcv" ? "ss" : "pcv")}>
+                    → {pr.key === "pcv" ? "SS" : "PCV"}
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-8 w-8" disabled={busy}
+                    title={used(c.id) > 0 ? (c.is_active ? "Hide (has products)" : "Show again") : "Delete"}
+                    onClick={() => remove(c)}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+        <DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Done</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
