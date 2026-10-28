@@ -1,3 +1,4 @@
+import { SupplierLedgerDialog } from "@/components/SupplierLedgerDialog";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -1116,6 +1117,7 @@ function SuppliersTab() {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", contact_name: "", phone: "", email: "", address: "" });
+  const [ledgerFor, setLedgerFor] = useState<string | null>(null);
 
   const { data: suppliers = [] } = useQuery({
     // unique cache key: the same key held a different column set on another page
@@ -1164,22 +1166,26 @@ function SuppliersTab() {
       <Card><CardContent className="p-0">
         <Table>
           <TableHeader><TableRow>
-            <TableHead>Name</TableHead><TableHead>Contact</TableHead><TableHead>Phone</TableHead><TableHead>Email</TableHead><TableHead className="text-right">Balance</TableHead>
+            <TableHead>Name</TableHead><TableHead>Contact</TableHead><TableHead>Phone</TableHead><TableHead>Email</TableHead><TableHead className="text-right">Balance</TableHead><TableHead />
           </TableRow></TableHeader>
           <TableBody>
-            {suppliers.length === 0 && <TableRow><TableCell colSpan={5} className="text-center py-6 text-muted-foreground">No suppliers yet.</TableCell></TableRow>}
+            {suppliers.length === 0 && <TableRow><TableCell colSpan={6} className="text-center py-6 text-muted-foreground">No suppliers yet.</TableCell></TableRow>}
             {suppliers.map((s) => (
-              <TableRow key={s.id}>
+              <TableRow key={s.id} className="cursor-pointer" onClick={() => setLedgerFor(s.id)}>
                 <TableCell className="font-medium">{s.name}</TableCell>
                 <TableCell>{s.contact_name ?? "—"}</TableCell>
                 <TableCell>{s.phone ?? "—"}</TableCell>
                 <TableCell>{s.email ?? "—"}</TableCell>
                 <TableCell className="text-right">৳ {Number(s.balance_due).toFixed(2)}</TableCell>
+                <TableCell className="text-right">
+                  <Button size="sm" variant="outline" className="h-7" onClick={(e) => { e.stopPropagation(); setLedgerFor(s.id); }}>Ledger</Button>
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       </CardContent></Card>
+      <SupplierLedgerDialog key={ledgerFor ?? "none"} open={!!ledgerFor} onOpenChange={(v) => !v && setLedgerFor(null)} suppliers={suppliers} supplierId={ledgerFor} />
     </div>
   );
 }

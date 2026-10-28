@@ -1,7 +1,8 @@
 import { withSchemaFallback } from "@/lib/schema-fallback";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { Truck, Plus, Trash2, Eye, RotateCcw, Wallet, Printer, X, Barcode, Upload, Pencil } from "lucide-react";
+import { Truck, Plus, Trash2, Eye, RotateCcw, Wallet, Printer, X, Barcode, Upload, Pencil, BookOpen } from "lucide-react";
+import { SupplierLedgerDialog } from "@/components/SupplierLedgerDialog";
 import { BarcodeLabelDialog, type LabelProduct } from "@/components/BarcodeLabelDialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/PageHeader";
@@ -153,6 +154,7 @@ function PurchasesPage() {
     });
   };
   const [startUpload, setStartUpload] = useState(false);
+  const [ledgerOpen, setLedgerOpen] = useState(false);
   const [viewId, setViewId] = useState<string | null>(null);
   const [returnFor, setReturnFor] = useState<string | null>(null);
   const [payFor, setPayFor] = useState<Invoice | null>(null);
@@ -234,6 +236,9 @@ function PurchasesPage() {
           <>
             <Button variant="outline" onClick={() => { setStartUpload(true); setOpenCreate(true); }}>
               <Upload className="h-4 w-4 mr-1" /> Upload Excel
+            </Button>
+            <Button variant="outline" onClick={() => setLedgerOpen(true)}>
+              <BookOpen className="h-4 w-4 mr-1" /> Supplier ledger
             </Button>
             <Button onClick={() => { setStartUpload(false); setOpenCreate(true); }}>
               <Plus className="h-4 w-4 mr-1" /> New Purchase Invoice
@@ -373,6 +378,8 @@ function PurchasesPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <SupplierLedgerDialog open={ledgerOpen} onOpenChange={setLedgerOpen} suppliers={suppliers} />
 
       {openCreate && (
         <PurchaseEntryDialog
