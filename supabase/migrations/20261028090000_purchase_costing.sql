@@ -82,8 +82,6 @@ BEGIN
 END; $$;
 REVOKE ALL ON FUNCTION public.cost_stock_in(uuid, numeric, numeric, text, text) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.cost_stock_out(uuid, numeric, numeric, text, text) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.purchase_lines(jsonb, numeric) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.purchase_lines(jsonb, numeric) TO authenticated;
 
 -- Lines of a purchase with their freight share, landed cost and "no stock" flag.
 -- Freight is split by line amount (amount %).
@@ -106,6 +104,8 @@ LANGUAGE sql STABLE SET search_path = public AS $$
          t.item
   FROM t ORDER BY t.idx;
 $$;
+REVOKE ALL ON FUNCTION public.purchase_lines(jsonb, numeric) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.purchase_lines(jsonb, numeric) TO authenticated;
 
 -- ---------- create ----------
 CREATE OR REPLACE FUNCTION public.create_purchase_invoice(_supplier_id uuid, _supplier_invoice_no text, _invoice_date date, _items jsonb, _discount numeric DEFAULT 0, _vat numeric DEFAULT 0, _freight numeric DEFAULT 0, _paid numeric DEFAULT 0, _payment_method payment_method DEFAULT 'cash'::payment_method, _notes text DEFAULT NULL::text, _stock_only boolean DEFAULT false)
