@@ -233,8 +233,12 @@ export function computePeriod(d: PeriodData) {
       cost += n(it.quantity) * unitCost(it.sale_items);
     }
     returnedGoods += goods;
-    cogsBack += cost;
-    dayRow(r.created_at).cogs -= cost;
+    // Only goods put back on the shelf stop being a cost; damaged / discarded
+    // returns stay a cost (the goods are gone).
+    if (r.restock !== false) {
+      cogsBack += cost;
+      dayRow(r.created_at).cogs -= cost;
+    }
     if (r.restock) restockedValue += goods; else notRestockedValue += goods;
     if (n(r.refund_paid) > 0) refundByMethod[r.refund_method ?? "cash"] = (refundByMethod[r.refund_method ?? "cash"] ?? 0) + n(r.refund_paid);
     returnRows.push({ date: r.created_at, returnNo: r.return_no, invoiceNo: sale?.invoice_no, type: cancel ? "Cancellation" : "Return", value, goods, refundPaid: n(r.refund_paid), dueReduction: n(r.due_reduction), method: r.refund_method, restock: !!r.restock, reason: r.reason });

@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { History, Receipt, Printer, Search, RotateCcw, Pencil, Wallet, Ban, Truck, Bike } from "lucide-react";
+import { History, Receipt, Printer, Search, RotateCcw, Pencil, Wallet, Ban, Truck, Bike, Lock } from "lucide-react";
 import { format } from "date-fns";
 import { PageHeader } from "@/components/PageHeader";
 import { supabase } from "@/integrations/supabase/client";
@@ -141,6 +141,17 @@ function SalesHistoryPage() {
   const [courierSaleId, setCourierSaleId] = useState<string | null>(null);
   const { hasRole } = useAuth();
   const isAdmin = hasRole("admin");
+  // Bills made before the last cash drawer close are locked: Return only.
+  const { data: lastClose } = useQuery({
+    queryKey: ["last-shift-close"],
+    staleTime: 60_000,
+    queryFn: async () => {
+      const { data } = await supabase.from("cash_shifts").select("closed_at").eq("status", "closed")
+        .order("closed_at", { ascending: false }).limit(1).maybeSingle();
+      return (data?.closed_at as string | null) ?? null;
+    },
+  });
+  const isLocked = (createdAt: string) => !!lastClose && new Date(createdAt).getTime() <= new Date(lastClose).getTime();
 
 
   // Same Dhaka business-day window + full pagination as Dashboard/Reports.
@@ -559,15 +570,20 @@ function SalesHistoryPage() {
                       <Button size="sm" variant="ghost" onClick={() => reprint(s.id)} disabled={reprintingId === s.id} title="Reprint invoice">
                         <Printer className="h-4 w-4" />
                       </Button>
-                      {isAdmin && s.status !== "void" && (
+                      {isAdmin && s.status !== "void" && !isLocked(s.created_at) && (
                         <Button size="sm" variant="ghost" onClick={() => setEditId(s.id)} title="Edit customer / note">
                           <Pencil className="h-4 w-4" />
                         </Button>
                       )}
-                      {isAdmin && s.status !== "void" && (
+                      {isAdmin && s.status !== "void" && !isLocked(s.created_at) && (
                         <Button size="sm" variant="ghost" className="text-destructive" onClick={() => { setCancelId(s.id); setCancelReason(""); setCancelRequestId(crypto.randomUUID()); }} title="Cancel sale">
                           <Ban className="h-4 w-4" />
                         </Button>
+                      )}
+                      {isAdmin && s.status !== "void" && isLocked(s.created_at) && (
+                        <span className="inline-flex items-center px-1.5 text-muted-foreground" title="Cash drawer closed — edit and cancel are locked. Use Return.">
+                          <Lock className="h-3.5 w-3.5" />
+                        </span>
                       )}
                       {s.status !== "void" && (
                         <Button size="sm" variant="ghost" className={courierOrders[s.id] ? (courierStatusColor[courierOrders[s.id].status] ?? "text-blue-600") : "text-blue-600"} onClick={() => setCourierSaleId(s.id)} title={courierOrders[s.id] ? `Courier: ${courierOrders[s.id].status.replace(/_/g, " ")}` : "Send via courier"}>
@@ -613,10 +629,15 @@ function SalesHistoryPage() {
                     {detailDelivery ? `Delivery · ${DELIVERY_STATUS_LABEL[detailDelivery.status]}` : "Delivery"}
                   </Button>
                 )}
-                {isAdmin && detail && (
+                {isAdmin && detail && !isLocked(detail.created_at) && (
                   <Button size="sm" variant="outline" onClick={() => setEditId(detail.id)}>
                     <Pencil className="h-4 w-4" /> Edit
                   </Button>
+                )}
+                {detail && detail.status !== "void" && isLocked(detail.created_at) && (
+                  <span className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs text-muted-foreground">
+                    <Lock className="h-3.5 w-3.5" /> Cash closed — Return only
+                  </span>
                 )}
               </div>
 
