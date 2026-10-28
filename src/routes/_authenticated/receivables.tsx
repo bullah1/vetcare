@@ -19,7 +19,8 @@ import { NewCustomerDialog } from "@/components/NewCustomerDialog";
 import { fetchAll } from "@/lib/fetch-all";
 
 import { withSchemaFallback } from "@/lib/schema-fallback";
-import { PROJECTS, asProject } from "@/lib/projects";
+import { PROJECTS, asProject, type Project } from "@/lib/projects";
+import { BusinessBadge, bizMatches } from "@/components/BusinessBadge";
 
 export const Route = createFileRoute("/_authenticated/receivables")({
   head: () => ({
@@ -48,7 +49,7 @@ type SaleRow = {
   owner: { id: string; full_name: string; phone: string | null } | null;
 };
 
-type Owner = { id: string; full_name: string; phone: string | null; created_at: string };
+type Owner = { id: string; full_name: string; phone: string | null; created_at: string; business?: string | null };
 
 const fmt = (n: number) => `৳${Number(n || 0).toLocaleString("en-BD", { maximumFractionDigits: 2 })}`;
 const daysAgo = (d: string) => Math.floor((Date.now() - new Date(d).getTime()) / 86400000);
@@ -56,6 +57,7 @@ const daysAgo = (d: string) => Math.floor((Date.now() - new Date(d).getTime()) /
 function CustomersPage() {
   const [q, setQ] = useState("");
   const [onlyDue, setOnlyDue] = useState(false);
+  const [biz, setBiz] = useState<"all" | Project>("all");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [dueSale, setDueSale] = useState<SaleRow | null>(null);
 
@@ -84,9 +86,10 @@ function CustomersPage() {
             200000,
           ),
         ),
-        fetchAll<Owner>(
-          () => supabase.from("pet_owners").select("id,full_name,phone,created_at").order("full_name").order("id"),
-          200000,
+        withSchemaFallback(
+          "pet_owners.business",
+          () => fetchAll<Owner>(() => (supabase as any).from("pet_owners").select("id,full_name,phone,created_at,business").order("full_name").order("id"), 200000),
+          () => fetchAll<Owner>(() => supabase.from("pet_owners").select("id,full_name,phone,created_at").order("full_name").order("id"), 200000),
         ),
       ]);
       return { sales, owners };
@@ -97,10 +100,10 @@ function CustomersPage() {
   const owners = data?.owners ?? [];
 
   const groups = useMemo(() => {
-    type G = { key: string; name: string; phone: string | null; due: number; duePcv: number; dueSs: number; spent: number; sales: SaleRow[] };
+    type G = { key: string; name: string; phone: string | null; business?: string | null; due: number; duePcv: number; dueSs: number; spent: number; sales: SaleRow[] };
     const map = new Map<string, G>();
     for (const o of owners) {
-      map.set(o.id, { key: o.id, name: o.full_name, phone: o.phone, due: 0, duePcv: 0, dueSs: 0, spent: 0, sales: [] });
+      map.set(o.id, { key: o.id, name: o.full_name, phone: o.phone, business: o.business, due: 0, duePcv: 0, dueSs: 0, spent: 0, sales: [] });
     }
     for (const s of sales) {
       const key = s.owner?.id ?? "walkin";
@@ -126,6 +129,11 @@ function CustomersPage() {
       map.set(key, g);
     }
     let list = [...map.values()].sort((a, b) => b.due - a.due || b.spent - a.spent);
+    // One business: its customers (and those of both), with that business's due.
+    if (biz !== "all") {
+      list = list.filter((g) => g.key !== "walkin" && bizMatches(g.business, biz))
+        .map((g) => ({ ...g, due: biz === "ss" ? g.dueSs : g.duePcv }));
+    }
     if (onlyDue) list = list.filter((g) => g.due > 0);
     const term = q.trim().toLowerCase();
     if (!term) return list;
@@ -135,7 +143,7 @@ function CustomersPage() {
         (g.phone ?? "").includes(term) ||
         g.sales.some((s) => s.invoice_no.toLowerCase().includes(term)),
     );
-  }, [sales, owners, q, onlyDue]);
+  }, [sales, owners, q, onlyDue, biz]);
 
   const totals = useMemo(() => {
     const due = groups.reduce((a, g) => a + g.due, 0);
@@ -146,6 +154,7 @@ function CustomersPage() {
     return { customers: groups.length, withDue, due, spent, duePcv, dueSs };
   }, [groups]);
   const hasSs = sales.some((s) => asProject(s.project) === "ss");
+  const hasBiz = owners.length > 0 && "business" in owners[0];
 
   return (
     <div className="p-0 sm:p-2">
@@ -180,7 +189,7 @@ function CustomersPage() {
             >
               <FileDown className="h-4 w-4" /> Excel
             </Button>
-            <NewCustomerDialog onCreated={() => refetch()} />
+            <NewCustomerDialog onCreated={() => refetch()} defaultBusiness={biz === "all" ? "pcv" : biz} />
           </div>
         }
       />
@@ -214,6 +223,14 @@ function CustomersPage() {
               className="pl-8"
             />
           </div>
+          {hasBiz && (
+            <div className="inline-flex rounded-md border p-0.5" role="tablist" aria-label="Business">
+              {([["all", "All"], ...PROJECTS.map((p) => [p.key, p.label])] as ["all" | Project, string][]).map(([k, l]) => (
+                <button key={k} type="button" role="tab" aria-selected={biz === k} onClick={() => setBiz(k)}
+                  className={`rounded px-3 py-1.5 text-sm ${biz === k ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{l}</button>
+              ))}
+            </div>
+          )}
           <Button variant={onlyDue ? "default" : "outline"} onClick={() => setOnlyDue((v) => !v)}>
             <Wallet className="h-4 w-4" /> Only with due
           </Button>
@@ -249,7 +266,7 @@ function CustomersPage() {
                     <TableRow className="cursor-pointer hover:bg-muted/50" onClick={() => setExpanded(open ? null : g.key)}>
                       <TableCell>{open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</TableCell>
                       <TableCell>
-                        <div className="font-medium">{g.name}</div>
+                        <div className="flex items-center gap-1.5 font-medium">{g.name}{hasBiz && g.key !== "walkin" && <BusinessBadge biz={g.business} />}</div>
                         {g.phone && (
                           <div className="text-xs text-muted-foreground flex items-center gap-1">
                             <Phone className="h-3 w-3" /> {g.phone}

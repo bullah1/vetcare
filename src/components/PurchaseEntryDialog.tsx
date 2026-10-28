@@ -5,6 +5,7 @@
 // Saving still goes through the existing create_purchase_invoice RPC, which does
 // stock and batches in one database transaction. Purchases are stock only:
 // no payment or supplier due is recorded (accounts are kept separately).
+import { BusinessBadge } from "@/components/BusinessBadge";
 import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { useMutation } from "@tanstack/react-query";
@@ -27,7 +28,7 @@ import {
 } from "@/lib/purchase-calc";
 
 export type EntryProduct = SearchProduct & { selling_price: number; no_stock?: boolean | null };
-export type EntrySupplier = { id: string; name: string; phone: string | null; balance_due: number };
+export type EntrySupplier = { id: string; name: string; phone: string | null; balance_due: number; business?: string | null };
 
 /** An existing purchase opened for editing. */
 export type EditPurchase = {
@@ -359,7 +360,11 @@ export function PurchaseEntryDialog({
               <Select value={supplierId} onValueChange={setSupplierId}>
                 <SelectTrigger className="h-9" aria-label="Supplier"><SelectValue placeholder="Supplier (optional)" /></SelectTrigger>
                 <SelectContent>
-                  {suppliers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                  {suppliers.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>
+                      <span className="inline-flex items-center gap-2">{s.name}{s.business !== undefined && <BusinessBadge biz={s.business} />}</span>
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

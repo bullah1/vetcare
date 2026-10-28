@@ -1,3 +1,5 @@
+import { asBiz, bizLabel, bizMatches, type Biz } from "@/components/BusinessBadge";
+import { BusinessPicker } from "@/components/BusinessPicker";
 import { SupplierLedgerDialog } from "@/components/SupplierLedgerDialog";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -1111,13 +1113,15 @@ function ProductDialog({ product, defaultProject = "pcv", hasNoStock = false, on
 
 /* -------------------- Suppliers -------------------- */
 
-type Supplier = { id: string; name: string; contact_name: string | null; phone: string | null; email: string | null; address: string | null; balance_due: number };
+type Supplier = { id: string; name: string; contact_name: string | null; phone: string | null; email: string | null; address: string | null; balance_due: number; business?: string | null };
 
 function SuppliersTab() {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", contact_name: "", phone: "", email: "", address: "" });
   const [ledgerFor, setLedgerFor] = useState<string | null>(null);
+  const [supBiz, setSupBiz] = useState<Biz>("pcv");
+  const [supTab, setSupTab] = useState<"all" | Project>("all");
 
   const { data: suppliers = [] } = useQuery({
     // unique cache key: the same key held a different column set on another page
@@ -1131,7 +1135,8 @@ function SuppliersTab() {
 
   const create = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase.from("suppliers").insert(form);
+      let { error } = await (supabase as any).from("suppliers").insert(hasSupBiz ? { ...form, business: supBiz } : form);
+      if (error && /business/.test(error.message ?? "")) ({ error } = await supabase.from("suppliers").insert(form));
       if (error) throw error;
     },
     onSuccess: () => {
@@ -1143,15 +1148,38 @@ function SuppliersTab() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const hasSupBiz = suppliers.length > 0 && "business" in suppliers[0];
+  const shownSuppliers = supTab === "all" ? suppliers : suppliers.filter((s) => bizMatches(s.business, supTab));
+  const setSupplierBiz = async (s: Supplier, b: Biz) => {
+    const { error } = await (supabase as any).from("suppliers").update({ business: b }).eq("id", s.id);
+    if (error) { toast.error(error.message); return; }
+    toast.success(`${s.name}: ${bizLabel(b)}`);
+    qc.invalidateQueries({ queryKey: ["suppliers"] });
+  };
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <Dialog open={open} onOpenChange={setOpen}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {hasSupBiz ? (
+          <div className="inline-flex rounded-md border p-0.5" role="tablist" aria-label="Business">
+            {([["all", "All"], ...PROJECTS.map((p) => [p.key, p.label])] as ["all" | Project, string][]).map(([k, l]) => (
+              <button key={k} type="button" role="tab" aria-selected={supTab === k} onClick={() => setSupTab(k)}
+                className={`rounded px-3 py-1 text-sm ${supTab === k ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{l}</button>
+            ))}
+          </div>
+        ) : <span />}
+        <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (v) setSupBiz(supTab === "all" ? "pcv" : supTab); }}>
           <DialogTrigger asChild><Button><Truck className="h-4 w-4" /> New supplier</Button></DialogTrigger>
           <DialogContent>
             <DialogHeader><DialogTitle>New supplier</DialogTitle></DialogHeader>
             <div className="space-y-3">
               <div className="space-y-2"><Label>Name</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
+              {hasSupBiz && (
+                <div className="space-y-2">
+                  <Label>Business</Label>
+                  <BusinessPicker<Biz> value={supBiz} onChange={setSupBiz} extra={{ value: "both", label: "Both" }} />
+                </div>
+              )}
               <div className="space-y-2"><Label>Contact person</Label><Input value={form.contact_name} onChange={(e) => setForm({ ...form, contact_name: e.target.value })} /></div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-2"><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
@@ -1166,13 +1194,24 @@ function SuppliersTab() {
       <Card><CardContent className="p-0">
         <Table>
           <TableHeader><TableRow>
-            <TableHead>Name</TableHead><TableHead>Contact</TableHead><TableHead>Phone</TableHead><TableHead>Email</TableHead><TableHead className="text-right">Balance</TableHead><TableHead />
+            <TableHead>Name</TableHead>{hasSupBiz && <TableHead>Business</TableHead>}<TableHead>Contact</TableHead><TableHead>Phone</TableHead><TableHead>Email</TableHead><TableHead className="text-right">Balance</TableHead><TableHead />
           </TableRow></TableHeader>
           <TableBody>
-            {suppliers.length === 0 && <TableRow><TableCell colSpan={6} className="text-center py-6 text-muted-foreground">No suppliers yet.</TableCell></TableRow>}
-            {suppliers.map((s) => (
+            {shownSuppliers.length === 0 && <TableRow><TableCell colSpan={7} className="text-center py-6 text-muted-foreground">No suppliers yet.</TableCell></TableRow>}
+            {shownSuppliers.map((s) => (
               <TableRow key={s.id} className="cursor-pointer" onClick={() => setLedgerFor(s.id)}>
                 <TableCell className="font-medium">{s.name}</TableCell>
+                {hasSupBiz && (
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <Select value={asBiz(s.business)} onValueChange={(v) => void setSupplierBiz(s, v as Biz)}>
+                      <SelectTrigger className="h-8 w-32" aria-label={`Business of ${s.name}`}><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {PROJECTS.map((p) => <SelectItem key={p.key} value={p.key}>{p.label}</SelectItem>)}
+                        <SelectItem value="both">Both</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                )}
                 <TableCell>{s.contact_name ?? "—"}</TableCell>
                 <TableCell>{s.phone ?? "—"}</TableCell>
                 <TableCell>{s.email ?? "—"}</TableCell>

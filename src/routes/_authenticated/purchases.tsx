@@ -124,7 +124,7 @@ function printPaymentReceipt(r: PaymentReceipt) {
 }
 
 type Product = { id: string; name: string; sku: string | null; barcode: string | null; unit: string | null; selling_price: number; purchase_price: number; stock_quantity: number; no_stock?: boolean | null };
-type Supplier = { id: string; name: string; phone: string | null; balance_due: number };
+type Supplier = { id: string; name: string; phone: string | null; balance_due: number; business?: string | null };
 type Invoice = {
   id: string; invoice_no: string; supplier_invoice_no: string | null; supplier_id: string | null;
   invoice_date: string; subtotal: number; discount: number; vat: number; freight: number;
@@ -177,7 +177,8 @@ function PurchasesPage() {
   const { data: suppliers = [] } = useQuery({
     queryKey: ["suppliers"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("suppliers").select("id,name,phone,balance_due").order("name");
+      let { data, error } = await (supabase as any).from("suppliers").select("id,name,phone,balance_due,business").order("name");
+      if (error && /business/.test(error.message ?? "")) ({ data, error } = await supabase.from("suppliers").select("id,name,phone,balance_due").order("name"));
       if (error) throw error;
       return (data ?? []) as Supplier[];
     },

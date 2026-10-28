@@ -1,3 +1,5 @@
+import { BusinessPicker } from "@/components/BusinessPicker";
+import { asBiz, type Biz } from "@/components/BusinessBadge";
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -36,6 +38,9 @@ export function CustomerEditDialog({ customer, open, onOpenChange, onSaved }: Pr
   const [notes, setNotes] = useState("");
   const [ctype, setCtype] = useState<"retail" | "b2b">("retail");
   const [ctypeLoaded, setCtypeLoaded] = useState(false);
+  // Business (Pet Care Vet / Sasthya Seba / Both) — after the customers & suppliers SQL.
+  const [biz, setBiz] = useState<Biz>("pcv");
+  const [bizLoaded, setBizLoaded] = useState(false);
   const qc = useQueryClient();
 
   useEffect(() => {
@@ -47,6 +52,9 @@ export function CustomerEditDialog({ customer, open, onOpenChange, onSaved }: Pr
     setAddress(customer.address ?? "");
     setNotes(customer.notes ?? "");
     setCtypeLoaded(false);
+    setBizLoaded(false);
+    (supabase as any).from("pet_owners").select("business").eq("id", customer.id).maybeSingle()
+      .then(({ data, error }: any) => { if (!error && data) { setBiz(asBiz(data.business)); setBizLoaded(true); } });
     if (schemaMissing("pet_owners.customer_type")) return;
     // Read separately so older databases without the column still work.
     (supabase as any).from("pet_owners").select("customer_type").eq("id", customer.id).maybeSingle()
@@ -73,6 +81,10 @@ export function CustomerEditDialog({ customer, open, onOpenChange, onSaved }: Pr
         })
         .eq("id", customer.id);
       if (error) throw error;
+      if (bizLoaded) {
+        const { error: bErr } = await (supabase as any).from("pet_owners").update({ business: biz }).eq("id", customer.id);
+        if (bErr) throw new Error(`Saved, but business was not saved: ${bErr.message}`);
+      }
       if (ctypeLoaded) {
         const { error: tErr } = await (supabase as any).from("pet_owners").update({ customer_type: ctype }).eq("id", customer.id);
         if (tErr) throw new Error(`Saved, but customer type was not saved: ${tErr.message}`);
@@ -123,6 +135,12 @@ export function CustomerEditDialog({ customer, open, onOpenChange, onSaved }: Pr
               ))}
             </div>
           </div>
+          {bizLoaded && (
+            <div className="space-y-2">
+              <Label>Business</Label>
+              <BusinessPicker<Biz> value={biz} onChange={setBiz} extra={{ value: "both", label: "Both" }} />
+            </div>
+          )}
           {ctypeLoaded && (
             <div className="space-y-2">
               <Label>Customer type</Label>

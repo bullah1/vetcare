@@ -33,6 +33,8 @@ import { HeldBillPrintMenu, openPrintWindow, printHeldBill } from "@/components/
 import { schemaMissing, withSchemaFallback } from "@/lib/schema-fallback";
 import { useEffect } from "react";
 import { PROJECTS, asProject, projectLabel, type Project } from "@/lib/projects";
+import { BusinessPicker } from "@/components/BusinessPicker";
+import { bizLabel, bizMatches, type Biz } from "@/components/BusinessBadge";
 import { resolveProductImageUrl } from "@/components/ProductImageUpload";
 import ThermalPrinterSettings from "@/components/ThermalPrinterSettings";
 import { Link } from "@tanstack/react-router";
@@ -350,7 +352,7 @@ type CartLine = {
   price_edited?: boolean;
 };
 
-type Owner = { id: string; full_name: string; phone: string | null; address?: string | null; visitCount?: number; customer_type?: string | null };
+type Owner = { id: string; full_name: string; phone: string | null; address?: string | null; visitCount?: number; customer_type?: string | null; business?: string | null };
 
 
 /** "pet_food" → "Pet food" */
@@ -475,6 +477,7 @@ function POSPage() {
   const [newCustName, setNewCustName] = useState("");
   const [newCustPhone, setNewCustPhone] = useState("");
   const [newCustGender, setNewCustGender] = useState<"male" | "female" | "">("");
+  const [newCustBiz, setNewCustBiz] = useState<Biz>("pcv");
   const searchRef = useRef<HTMLInputElement>(null);
   const cartCardRef = useRef<HTMLDivElement>(null);
   const cartHydrated = useRef(false);
@@ -696,9 +699,13 @@ function POSPage() {
     meta: { manualRefresh: true },
     queryFn: () =>
       withSchemaFallback(
-        "pet_owners.customer_type",
-        () => fetchAll<Owner>(() => (supabase as any).from("pet_owners").select("id,full_name,phone,address,customer_type").order("full_name").order("id")),
-        () => fetchAll<Owner>(() => supabase.from("pet_owners").select("id,full_name,phone,address").order("full_name").order("id")),
+        "pet_owners.business",
+        () => fetchAll<Owner>(() => (supabase as any).from("pet_owners").select("id,full_name,phone,address,customer_type,business").order("full_name").order("id")),
+        () => withSchemaFallback(
+          "pet_owners.customer_type",
+          () => fetchAll<Owner>(() => (supabase as any).from("pet_owners").select("id,full_name,phone,address,customer_type").order("full_name").order("id")),
+          () => fetchAll<Owner>(() => supabase.from("pet_owners").select("id,full_name,phone,address").order("full_name").order("id")),
+        ),
       ),
     staleTime: 10 * 60_000,
     gcTime: 30 * 60_000,
@@ -762,10 +769,24 @@ function POSPage() {
     setCart((c) => c.map((l) => (l.product_id === id ? { ...l, discount: Math.min(Math.max(0, Number(raw) || 0), l.unit_price * l.quantity) } : l)));
   const belowMin = (l: CartLine) => l.min_price != null && l.unit_price < Number(l.min_price) - 0.004;
 
+  const hasOwnerBiz = owners.length > 0 && "business" in owners[0];
   const ownersWithCount = useMemo(() => {
-    if (!visitCountMap) return owners;
-    return owners.map((o) => ({ ...o, visitCount: visitCountMap.get(customerKey(o)) || 0 }));
-  }, [owners, visitCountMap]);
+    // Only this business's customers (and those of both) are offered on this bill.
+    const mine = hasOwnerBiz ? owners.filter((o) => bizMatches(o.business, project) || o.id === ownerId) : owners;
+    if (!visitCountMap) return mine;
+    return mine.map((o) => ({ ...o, visitCount: visitCountMap.get(customerKey(o)) || 0 }));
+  }, [owners, visitCountMap, hasOwnerBiz, project, ownerId]);
+
+  /** Same phone already a customer of the other business: offer to make them "Both" instead of a duplicate. */
+  const adoptExistingCustomer = async (dup: Owner): Promise<string | null> => {
+    if (!hasOwnerBiz || bizMatches(dup.business, project)) return dup.id;
+    if (!confirm(`${dup.full_name} (${dup.phone ?? ""}) is a ${bizLabel(dup.business)} customer. Add them to ${projectLabel(project)} too?`)) return null;
+    const { error } = await (supabase as any).from("pet_owners").update({ business: "both" }).eq("id", dup.id);
+    if (error) { toast.error(error.message); return null; }
+    qc.setQueryData<Owner[]>(["owners"], (old) => old?.map((o) => (o.id === dup.id ? { ...o, business: "both" } : o)));
+    toast.success(`${dup.full_name} is now a customer of both businesses`);
+    return dup.id;
+  };
 
 
   // Pre-normalized search index so keystrokes don't re-lowercase the whole catalog.
@@ -1384,13 +1405,18 @@ function POSPage() {
       if (!name) throw new Error("Customer name is required");
       if (phone) {
         const dup = owners.find((o) => (o.phone ?? "").replace(/\s+/g, "") === phone.replace(/\s+/g, ""));
-        if (dup) return dup;
+        if (dup) {
+          const id = await adoptExistingCustomer(dup);
+          if (!id) throw new Error("Not saved — this phone number already belongs to a customer");
+          return dup;
+        }
       }
-      const { data, error } = await supabase.from("pet_owners")
-        .insert({ full_name: name, phone: phone || null, gender: newCustGender || null })
+      const row = { full_name: name, phone: phone || null, gender: newCustGender || null };
+      const { data, error } = await (supabase as any).from("pet_owners")
+        .insert(hasOwnerBiz ? { ...row, business: newCustBiz } : row)
         .select("id,full_name,phone").single();
       if (error) throw error;
-      return data as Owner;
+      return { ...(data as Owner), business: hasOwnerBiz ? newCustBiz : undefined };
     },
     onSuccess: (o) => {
       toast.success(`Customer "${o.full_name}" saved`);
@@ -1398,7 +1424,7 @@ function POSPage() {
       qc.invalidateQueries({ queryKey: ["pet_owners"] });
       setOwnerId(o.id);
       setNewCustOpen(false);
-      setNewCustName(""); setNewCustPhone(""); setNewCustGender("");
+      setNewCustName(""); setNewCustPhone(""); setNewCustGender(""); setNewCustBiz(project);
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -1411,13 +1437,14 @@ function POSPage() {
     try {
       if (phone) {
         const dup = owners.find((o) => (o.phone ?? "").replace(/\D/g, "").replace(/^88/, "") === phone);
-        if (dup) return dup.id;
+        if (dup) return await adoptExistingCustomer(dup);
       }
-      const { data, error } = await supabase.from("pet_owners")
-        .insert({ full_name: name, phone })
+      // New customer belongs to the business of this bill.
+      const { data, error } = await (supabase as any).from("pet_owners")
+        .insert(hasOwnerBiz ? { full_name: name, phone, business: project } : { full_name: name, phone })
         .select("id,full_name,phone").single();
       if (error) throw error;
-      const o = data as Owner;
+      const o = { ...(data as Owner), business: hasOwnerBiz ? project : undefined };
       // Show the new customer at once, before the list reloads.
       qc.setQueryData<Owner[]>(["owners"], (old) => (old ? [...old, o] : [o]));
       qc.invalidateQueries({ queryKey: ["owners"] });
@@ -1486,7 +1513,7 @@ function POSPage() {
           onPicked={isDesk ? () => { paidRef.current?.focus(); paidRef.current?.select(); } : undefined}
           onQuickAdd={quickAddCustomer}
         />
-        <Button type="button" variant="outline" size="icon" onClick={() => setNewCustOpen(true)} title="Add new customer">
+        <Button type="button" variant="outline" size="icon" onClick={() => { setNewCustBiz(project); setNewCustOpen(true); }} title="Add new customer">
           <UserPlus className="h-4 w-4" />
         </Button>
       </div>
@@ -2459,6 +2486,12 @@ function POSPage() {
               <Label>Phone</Label>
               <Input value={newCustPhone} onChange={(e) => setNewCustPhone(e.target.value)} placeholder="01XXXXXXXXX" inputMode="tel" />
             </div>
+            {hasOwnerBiz && (
+              <div className="space-y-1.5">
+                <Label>Business</Label>
+                <BusinessPicker<Biz> value={newCustBiz} onChange={setNewCustBiz} extra={{ value: "both", label: "Both" }} />
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label>Gender</Label>
               <div className="grid grid-cols-2 gap-2">

@@ -1,3 +1,5 @@
+import { BusinessPicker } from "@/components/BusinessPicker";
+import type { Biz } from "@/components/BusinessBadge";
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -10,8 +12,9 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 
-export function NewCustomerDialog({ onCreated }: { onCreated?: (id: string) => void }) {
+export function NewCustomerDialog({ onCreated, defaultBusiness = "pcv" }: { onCreated?: (id: string) => void; defaultBusiness?: Biz }) {
   const [open, setOpen] = useState(false);
+  const [biz, setBiz] = useState<Biz>(defaultBusiness);
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [gender, setGender] = useState<"male" | "female" | "">("");
@@ -21,7 +24,7 @@ export function NewCustomerDialog({ onCreated }: { onCreated?: (id: string) => v
   const [b2b, setB2b] = useState(false);
 
   const reset = () => {
-    setFullName(""); setPhone(""); setGender(""); setEmail(""); setAddress(""); setNotes(""); setB2b(false);
+    setFullName(""); setPhone(""); setGender(""); setEmail(""); setAddress(""); setNotes(""); setB2b(false); setBiz(defaultBusiness);
   };
 
   const qc = useQueryClient();
@@ -29,18 +32,18 @@ export function NewCustomerDialog({ onCreated }: { onCreated?: (id: string) => v
     mutationFn: async () => {
       const name = fullName.trim();
       if (!name) throw new Error("Customer name required");
-      const { data, error } = await supabase
-        .from("pet_owners")
-        .insert({
-          full_name: name,
-          phone: phone.trim() || null,
-          gender: gender || null,
-          email: email.trim() || null,
-          address: address.trim() || null,
-          notes: notes.trim() || null,
-        })
-        .select("id")
-        .single();
+      const row = {
+        full_name: name,
+        phone: phone.trim() || null,
+        gender: gender || null,
+        email: email.trim() || null,
+        address: address.trim() || null,
+        notes: notes.trim() || null,
+      };
+      const ins = (r: Record<string, unknown>) => (supabase as any).from("pet_owners").insert(r).select("id").single();
+      let { data, error } = await ins({ ...row, business: biz });
+      // Older database without the business column.
+      if (error && /business/.test(error.message ?? "")) ({ data, error } = await ins(row));
       if (error) throw error;
       if (b2b) {
         const { error: tErr } = await (supabase as any).from("pet_owners").update({ customer_type: "b2b" }).eq("id", data.id);
@@ -95,6 +98,10 @@ export function NewCustomerDialog({ onCreated }: { onCreated?: (id: string) => v
                 </Button>
               ))}
             </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Business</Label>
+            <BusinessPicker<Biz> value={biz} onChange={setBiz} extra={{ value: "both", label: "Both" }} />
           </div>
           <label className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm">
             <span>B2B / Wholesale customer<span className="block text-xs text-muted-foreground">Uses wholesale prices in POS</span></span>
