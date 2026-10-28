@@ -161,12 +161,13 @@ export function SaleEditDialog({
       ) +
       0;
     const tax = lines.reduce((a, l) => a + (l.tax || 0), 0);
-    const total = Math.max(subtotal + tax - (Number(invoiceDiscount) || 0), 0);
+    // Bill as it was made (lines are locked, so this is the original bill).
+    const total = sale?.total != null ? Number(sale.total) : Math.max(subtotal + tax - (Number(invoiceDiscount) || 0), 0);
     const paid = Number(sale?.paid ?? 0);
-    // The server's due already accounts for returns; the gross line total
-    // minus paid overstated the due on partly returned invoices.
     const due = sale?.due != null ? Number(sale.due) : Math.max(total - paid, 0);
-    return { subtotal, tax, total, paid, due };
+    // Returns already taken off by the server: Total − Returned = Paid + Due.
+    const returned = Math.max(Math.round((total - paid - due) * 100) / 100, 0);
+    return { subtotal, tax, total, paid, due, returned, net: paid + due };
   }, [lines, invoiceDiscount, sale?.paid, sale?.due]);
 
   const selectedCustomer = customers.find((c) => c.id === ownerId);
@@ -287,7 +288,7 @@ export function SaleEditDialog({
                   <TableCell className="text-sm">
                     {l.name}
                     {l.returned_quantity > 0 && (
-                      <div className="text-xs text-destructive">Returned: {l.returned_quantity}</div>
+                      <div className="text-xs text-destructive">Returned: {l.returned_quantity} · kept {Number(l.quantity) - l.returned_quantity}</div>
                     )}
                   </TableCell>
                   <TableCell>
@@ -368,6 +369,12 @@ export function SaleEditDialog({
             <div className="flex justify-between"><span className="text-muted-foreground">Tax</span><span className="tabular-nums">{fmt(totals.tax)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Invoice discount</span><span className="tabular-nums">- {fmt(Number(invoiceDiscount) || 0)}</span></div>
             <div className="flex justify-between font-semibold text-base border-t pt-1"><span>Total</span><span className="tabular-nums">{fmt(totals.total)}</span></div>
+            {totals.returned > 0.009 && (
+              <>
+                <div className="flex justify-between text-destructive"><span>Returned / refunded</span><span className="tabular-nums">- {fmt(totals.returned)}</span></div>
+                <div className="flex justify-between font-medium"><span>Bill after return</span><span className="tabular-nums">{fmt(totals.net)}</span></div>
+              </>
+            )}
             <div className="flex justify-between"><span className="text-muted-foreground">Paid</span><span className="tabular-nums">{fmt(totals.paid)}</span></div>
             <div className={`flex justify-between font-medium ${totals.due > 0 ? "text-destructive" : "text-emerald-600"}`}><span>Due</span><span className="tabular-nums">{fmt(totals.due)}</span></div>
              <p className="text-xs text-muted-foreground pt-2">Original quantities, prices, discounts and payments cannot be edited.</p>
