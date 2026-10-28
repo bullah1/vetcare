@@ -1,7 +1,7 @@
 // New purchase invoice — keyboard-first entry.
 //
-// Flow: search → Enter picks the product → Qty → Enter → Total (or Tab to Unit
-// price) → Enter adds the line → focus returns to search. Ctrl+Enter saves.
+// Flow: search → Enter picks the product → Qty → Enter → Unit price (or Tab to
+// Total) → Enter adds the line → focus returns to search. Ctrl+Enter saves.
 // Saving still goes through the existing create_purchase_invoice RPC, which does
 // stock and batches in one database transaction. Purchases are stock only:
 // no payment or supplier due is recorded (accounts are kept separately).
@@ -158,6 +158,12 @@ export function PurchaseEntryDialog({
     focusSelect(qtyRef.current);
   };
 
+  // Clicking Qty / price before choosing a product: go to the search box.
+  const pickFirst = () => {
+    toast.info("Choose a product first");
+    focusSelect(searchRef.current);
+  };
+
   const cancelEntry = () => {
     flushSync(() => {
       setEntryProduct(null);
@@ -210,7 +216,7 @@ export function PurchaseEntryDialog({
       if (field === "qty") {
         if (lineError({ ...entry, unit_price: "0", source: "unit" })) { setEntryError("Enter a quantity above 0"); focusSelect(qtyRef.current); return; }
         setEntryError(null);
-        focusSelect(totalRef.current);
+        focusSelect(unitRef.current);
       } else addEntry();
     } else if (e.key === "Escape") {
       e.preventDefault();
@@ -372,20 +378,20 @@ export function PurchaseEntryDialog({
               onPick={pickProduct}
               onNoMatch={(q) => toast.error(`No product for "${q}". Create it in Inventory or use Upload Excel.`)}
             />
-            <EntryField label="Qty" suffix={entryProduct?.unit ?? undefined}>
+            <EntryField label="Qty" suffix={entryProduct?.unit ?? undefined} onEmptyClick={entryProduct ? undefined : pickFirst}>
               <input ref={qtyRef} inputMode="decimal" disabled={!entryProduct} value={entry.quantity}
                 onChange={(e) => { setEntryError(null); setEntry((l) => onQuantity(l, e.target.value)); }}
-                onKeyDown={entryKeys("qty")} className={entryInput} aria-label="Quantity" />
+                onKeyDown={entryKeys("qty")} onFocus={(e) => e.currentTarget.select()} className={entryInput} aria-label="Quantity" />
             </EntryField>
-            <EntryField label="Total ৳" active={entry.source === "total" && !!entryProduct}>
-              <input ref={totalRef} inputMode="decimal" disabled={!entryProduct} value={entry.total}
-                onChange={(e) => { setEntryError(null); setEntry((l) => onTotal(l, e.target.value)); }}
-                onKeyDown={entryKeys("total")} className={entryInput} aria-label="Total purchase amount" />
-            </EntryField>
-            <EntryField label="Unit price ৳" active={entry.source === "unit" && !!entryProduct}>
+            <EntryField label="Unit price ৳" active={entry.source === "unit" && !!entryProduct} onEmptyClick={entryProduct ? undefined : pickFirst}>
               <input ref={unitRef} inputMode="decimal" disabled={!entryProduct} value={entry.unit_price}
                 onChange={(e) => { setEntryError(null); setEntry((l) => onUnitPrice(l, e.target.value)); }}
-                onKeyDown={entryKeys("unit")} className={entryInput} aria-label="Per unit purchase price" />
+                onKeyDown={entryKeys("unit")} onFocus={(e) => e.currentTarget.select()} className={entryInput} aria-label="Per unit purchase price" />
+            </EntryField>
+            <EntryField label="Total ৳" active={entry.source === "total" && !!entryProduct} onEmptyClick={entryProduct ? undefined : pickFirst}>
+              <input ref={totalRef} inputMode="decimal" disabled={!entryProduct} value={entry.total}
+                onChange={(e) => { setEntryError(null); setEntry((l) => onTotal(l, e.target.value)); }}
+                onKeyDown={entryKeys("total")} onFocus={(e) => e.currentTarget.select()} className={entryInput} aria-label="Total purchase amount" />
             </EntryField>
             <Button type="button" className="col-span-3 h-11 md:col-span-1" disabled={!entryProduct} onClick={addEntry}>
               <Plus className="h-4 w-4" /> Add
@@ -486,11 +492,11 @@ export function PurchaseEntryDialog({
 }
 
 const entryInput =
-  "h-11 w-full rounded-lg border border-input bg-background px-3 pt-3 text-right text-[15px] font-medium tabular-nums outline-none transition-shadow focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/25 disabled:cursor-not-allowed disabled:opacity-50";
+  "h-11 w-full rounded-lg border border-input bg-background px-3 pt-3 text-right text-[15px] font-medium tabular-nums outline-none transition-shadow focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/25 disabled:pointer-events-none disabled:opacity-50";
 
-function EntryField({ label, suffix, active, children }: { label: string; suffix?: string; active?: boolean; children: ReactNode }) {
+function EntryField({ label, suffix, active, onEmptyClick, children }: { label: string; suffix?: string; active?: boolean; onEmptyClick?: () => void; children: ReactNode }) {
   return (
-    <label className="relative block min-w-0">
+    <label className="relative block min-w-0" onClick={onEmptyClick}>
       <span className={cn("pointer-events-none absolute left-2.5 top-1 text-[11px] font-medium", active ? "text-primary" : "text-muted-foreground")}>
         {label}{suffix ? ` (${suffix})` : ""}
       </span>
@@ -544,11 +550,11 @@ function RowView({ r, i, p, a, err, cost, onChange, onRemove }: {
           </div>
         </td>
         <td className="py-1.5 text-xs text-muted-foreground">{p?.unit || "—"}</td>
-        <td className="py-1.5"><input className={cellInput} inputMode="decimal" value={r.quantity} aria-label="Quantity"
+        <td className="py-1.5"><input className={cellInput} inputMode="decimal" value={r.quantity} aria-label="Quantity" onFocus={(e) => e.currentTarget.select()}
           onChange={(e) => onChange((x) => ({ ...x, ...onQuantity(x, e.target.value) }))} onKeyDown={blurOnEnter} /></td>
-        <td className="py-1.5"><input className={cn(cellInput, r.source === "unit" && "font-semibold")} inputMode="decimal" value={r.unit_price} aria-label="Unit price"
+        <td className="py-1.5"><input className={cn(cellInput, r.source === "unit" && "font-semibold")} inputMode="decimal" value={r.unit_price} aria-label="Unit price" onFocus={(e) => e.currentTarget.select()}
           onChange={(e) => onChange((x) => ({ ...x, ...onUnitPrice(x, e.target.value) }))} onKeyDown={blurOnEnter} /></td>
-        <td className="py-1.5"><input className={cn(cellInput, r.source === "total" && "font-semibold")} inputMode="decimal" value={r.total} aria-label="Total amount"
+        <td className="py-1.5"><input className={cn(cellInput, r.source === "total" && "font-semibold")} inputMode="decimal" value={r.total} aria-label="Total amount" onFocus={(e) => e.currentTarget.select()}
           onChange={(e) => onChange((x) => ({ ...x, ...onTotal(x, e.target.value) }))} onKeyDown={blurOnEnter} /></td>
         <td className="py-1.5">
           <div className="flex items-center justify-end gap-1">
