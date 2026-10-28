@@ -272,7 +272,7 @@ const ProductCard = memo(function ProductCard({ p, ranges, onAdd, active = false
         <PosThumb path={p.image_url} name={p.name} />
         <div className="min-w-0 flex-1">
           <HighlightText className="line-clamp-2 text-[13px] font-medium leading-snug text-foreground" text={p.name} ranges={ranges} />
-          {p.category && <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{p.category}</p>}
+          {p.category && <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{niceCategory(p.category)}</p>}
         </div>
       </div>
       <div className="mt-auto flex items-end justify-between gap-2 pt-2.5">
@@ -304,7 +304,7 @@ const ProductRow = memo(function ProductRow({ p, ranges, onAdd, active = false }
       <PosThumb path={p.image_url} name={p.name} />
       <span className="min-w-0 flex-1">
         <HighlightText className="block truncate text-[13px] font-medium text-foreground" text={p.name} ranges={ranges} />
-        <span className="block truncate text-[11px] text-muted-foreground">{[p.category, p.sku && `SKU ${p.sku}`].filter(Boolean).join("   ")}</span>
+        <span className="block truncate text-[11px] text-muted-foreground">{[p.category && niceCategory(p.category), p.sku && `SKU ${p.sku}`].filter(Boolean).join("   ")}</span>
       </span>
       <span className={`hidden w-28 shrink-0 items-center justify-end gap-1 text-[11px] font-medium tabular-nums sm:flex ${stockTone}`}>
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
@@ -352,6 +352,9 @@ type CartLine = {
 
 type Owner = { id: string; full_name: string; phone: string | null; address?: string | null; visitCount?: number; customer_type?: string | null };
 
+
+/** "pet_food" → "Pet food" */
+const niceCategory = (c: string) => { const t = c.replace(/_/g, " ").trim(); return t ? t[0].toUpperCase() + t.slice(1) : t; };
 
 const METHODS = ["cash", "bkash", "nagad", "rocket", "card", "bank", "due"] as const;
 type PayMethod = Exclude<(typeof METHODS)[number], "due">;
@@ -1490,8 +1493,10 @@ function POSPage() {
       {/* Items */}
       <div className="-mx-1 max-h-[38dvh] overflow-y-auto overscroll-contain px-1 lg:max-h-[32vh]">
         {cart.length === 0 && (
-          <div className="rounded-lg border border-dashed py-8 text-center text-sm text-muted-foreground">
-            Scan or search a product to start the bill
+          <div className="flex flex-col items-center gap-1.5 rounded-xl bg-muted/40 py-8 text-center">
+            <ShoppingCart className="h-6 w-6 text-muted-foreground/60" />
+            <p className="text-sm font-medium">Cart is empty</p>
+            <p className="text-xs text-muted-foreground">Scan a barcode or tap a product to add it</p>
           </div>
         )}
         <ul className="divide-y">
@@ -1675,20 +1680,34 @@ function POSPage() {
       {/* Payment */}
       <div className="space-y-2">
         <div className="grid grid-cols-4 gap-1.5" role="radiogroup" aria-label="Payment method">
-          {METHODS.map((m) => (
+          {(["cash", "bkash", "nagad"] as const).map((m) => (
             <button
               key={m}
               type="button"
               role="radio"
               aria-checked={method === m}
-              onClick={() => { setMethod(m); if (m === "due") setExtraPays([]); }}
-              className={`h-8 rounded-md border px-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                method === m ? "border-primary bg-primary text-primary-foreground" : "bg-background hover:bg-muted"
+              onClick={() => setMethod(m)}
+              className={`h-10 rounded-lg border text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                method === m ? "border-primary bg-primary text-primary-foreground shadow-sm" : "bg-background hover:bg-muted"
               }`}
             >
-              {m === "due" ? "Due" : METHOD_LABELS[m]}
+              {METHOD_LABELS[m]}
             </button>
           ))}
+          {/* Less used methods in one menu */}
+          <select
+            aria-label="Other payment method"
+            value={(["card", "bank", "rocket"] as string[]).includes(method) ? method : ""}
+            onChange={(e) => e.target.value && setMethod(e.target.value as (typeof METHODS)[number])}
+            className={`h-10 rounded-lg border px-1.5 text-center text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+              (["card", "bank", "rocket"] as string[]).includes(method) ? "border-primary bg-primary text-primary-foreground" : "bg-background"
+            }`}
+          >
+            <option value="">More ▾</option>
+            <option value="card">Card</option>
+            <option value="bank">Bank</option>
+            <option value="rocket">Rocket</option>
+          </select>
         </div>
         <div className="relative">
           <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{splitOn ? METHOD_LABELS[method] : "Received"}</span>
@@ -1755,6 +1774,15 @@ function POSPage() {
             + Split payment (e.g. part bKash, part cash)
           </button>
         )}
+        <label className="flex cursor-pointer items-center justify-between gap-2 rounded-lg px-1 text-sm">
+          <span className={method === "due" ? "font-medium text-destructive" : "text-muted-foreground"}>Not paid now — keep as due</span>
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-[var(--destructive)]"
+            checked={method === "due"}
+            onChange={(e) => { setMethod(e.target.checked ? "due" : "cash"); if (e.target.checked) setExtraPays([]); }}
+          />
+        </label>
         {splitOn && (
           <p className="flex justify-between text-xs text-muted-foreground">
             <span>{tenderList(method, paidAmount, extraPays, grandTotal).map((p) => `${METHOD_LABELS[p.method as PayMethod] ?? p.method} ৳${p.amount.toFixed(0)}`).join(" + ")}</span>
@@ -1796,16 +1824,17 @@ function POSPage() {
       </div>
 
       {!shiftOpen && (
-        <p className="flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          <AlertTriangle className="h-4 w-4 shrink-0" /> Cash drawer is closed — open a shift to sell.
-        </p>
+        <div className="flex items-center justify-between gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <span className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 shrink-0" /> Cash drawer is closed</span>
+          <Link to="/cash-drawer" className="rounded-md bg-destructive px-2.5 py-1 text-xs font-semibold text-white hover:opacity-90">Open shift</Link>
+        </div>
       )}
 
       <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2">
         <Button className="h-12 text-base" disabled={cart.length === 0 || hasZeroQty || checkout.isPending || !shiftOpen} onClick={() => checkout.mutate()}>
           <ReceiptIcon className="h-4 w-4" />
           {!shiftOpen
-            ? "Shift not open"
+            ? "Open a shift to sell"
             : checkout.isPending
               ? "Saving…"
               : method === "due"
@@ -1868,7 +1897,7 @@ function POSPage() {
         {/* Product grid */}
         <div className="min-w-0 space-y-3">
           <div className="sticky top-14 z-20 -mx-3 border-b bg-background/95 px-3 py-2 backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0">
-            <div className="mb-2 grid grid-cols-2 gap-1 rounded-lg border bg-muted/40 p-1" role="tablist" aria-label="Project">
+            <div className="mb-2 inline-grid w-full grid-cols-2 gap-1 rounded-xl bg-muted/60 p-1 sm:w-auto" role="tablist" aria-label="Business">
               {PROJECTS.map((pr) => {
                 const on = project === pr.key;
                 return (
@@ -1879,12 +1908,11 @@ function POSPage() {
                     aria-selected={on}
                     onClick={() => switchProject(pr.key)}
                     title={on ? `${pr.label} bill` : cart.length > 0 ? "Finish or hold this bill first" : `Switch to ${pr.label}`}
-                    className={`flex items-center justify-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${on ? "text-white shadow-sm" : "text-muted-foreground hover:bg-background hover:text-foreground"}`}
+                    className={`flex items-center justify-center gap-2 rounded-lg px-4 py-1.5 text-sm font-medium transition-colors ${on ? "text-white shadow-sm" : "text-muted-foreground hover:bg-background hover:text-foreground"}`}
                     style={on ? { background: pr.tone } : undefined}
                   >
                     <span className={`h-2 w-2 rounded-full ${on ? "bg-white" : ""}`} style={on ? undefined : { background: pr.tone }} />
                     {pr.label}
-                    <span className={`text-xs ${on ? "text-white/80" : "opacity-70"}`}>{pr.key === "ss" ? "SS-…" : "INV-…"}</span>
                   </button>
                 );
               })}
@@ -1916,7 +1944,7 @@ function POSPage() {
             </div>
             {desktop && (
               <p className="mt-1.5 px-1 text-[11px] text-muted-foreground/80">
-                Enter opens the marked product · ↑ ↓ to choose · empty Enter or F4 for customer · F9 to pay
+                <b className="font-medium">Enter</b> add · <b className="font-medium">↑ ↓</b> choose · <b className="font-medium">F4</b> customer · <b className="font-medium">F9</b> pay
               </p>
             )}
           </div>
@@ -1941,8 +1969,21 @@ function POSPage() {
             </div>
           </div>
           {filtered.length === 0 ? (
-            <div className="rounded-xl border border-dashed py-10 text-center text-sm text-muted-foreground">
-              No product matches “{q.trim()}”. Check the spelling or scan the barcode.
+            <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed bg-card/50 py-12 text-center">
+              {products.length === 0 ? (
+                <>
+                  <p className="font-medium">No {projectLabel(project)} products yet</p>
+                  <p className="max-w-sm text-sm text-muted-foreground">Add products in Inventory and choose “{projectLabel(project)}” as their business.</p>
+                  <Button asChild size="sm" className="mt-1"><Link to="/inventory">Add products</Link></Button>
+                </>
+              ) : q.trim() ? (
+                <>
+                  <p className="font-medium">No match for “{q.trim()}”</p>
+                  <p className="text-sm text-muted-foreground">Check the spelling or scan the barcode.</p>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">Type a name or scan a barcode to find products.</p>
+              )}
             </div>
           ) : view === "list" ? (
             <div data-pos-grid className="min-w-0 divide-y overflow-hidden rounded-xl border bg-card">
