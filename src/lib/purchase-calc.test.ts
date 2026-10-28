@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  averageCost, chargeShares, landedUnitCost,
   num, onQuantity, onUnitPrice, onTotal, exactUnitPrice, lineAmounts, invoiceTotals, lineError, type LineInput,
 } from "./purchase-calc";
 
@@ -96,4 +97,24 @@ describe("discounts and invoice totals", () => {
     assert.equal(t.net, 100 - 10 + 4.5 + 20);
     assert.equal(invoiceTotals([], totals0).net, 0);
   });
+});
+
+
+describe("courier charges and average cost", () => {
+it("charges are split by line amount", () => {
+  assert.deepEqual(chargeShares([2550, 1000], 355), [255, 100]);
+  assert.deepEqual(chargeShares([100, 0], 50), [50, 0]);
+  assert.deepEqual(chargeShares([100, 200], 0), [0, 0]);
+});
+
+it("landed cost and weighted average match the server", () => {
+  const landed = landedUnitCost(2550, 255, 17);
+  assert.equal(landed, 165);
+  assert.equal(Math.round(averageCost(33, 120, 17, landed) * 100) / 100, 135.3);
+  // nothing on the shelf → new cost
+  assert.equal(averageCost(0, 120, 10, 150), 150);
+  assert.equal(averageCost(-3, 120, 10, 150), 150);
+  // no cost yet → new cost
+  assert.equal(averageCost(5, 0, 10, 150), 150);
+});
 });

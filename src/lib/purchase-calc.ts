@@ -130,3 +130,29 @@ export function lineError(line: LineInput): string | null {
   if (line.disc_value.trim() !== "" && num(line.disc_value) === null) return "Discount is not a number";
   return null;
 }
+
+/**
+ * Additional charges (courier / freight) split over the lines by their amount
+ * (amount %), same as the server. Returns each line's share.
+ */
+export function chargeShares(lineFinals: number[], charges: number): number[] {
+  const sub = lineFinals.reduce((s, v) => s + Math.max(v, 0), 0);
+  if (!(charges > 0) || sub <= 0) return lineFinals.map(() => 0);
+  return lineFinals.map((v) => round2((charges * Math.max(v, 0)) / sub));
+}
+
+/** Unit cost of a line including its share of the charges. */
+export function landedUnitCost(lineFinal: number, share: number, qty: number): number {
+  return qty > 0 ? (lineFinal + share) / qty : 0;
+}
+
+/**
+ * Weighted average cost after stock comes in, same as the server:
+ * (stock on hand × its cost + new qty × new cost) ÷ total. No (or negative)
+ * stock, or no cost yet → the new cost.
+ */
+export function averageCost(stock: number, cost: number, qty: number, unitCost: number): number {
+  const on = Math.max(stock || 0, 0);
+  if (on <= 0 || !(cost > 0) || !(qty > 0)) return unitCost;
+  return (on * cost + qty * unitCost) / (on + qty);
+}

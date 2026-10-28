@@ -338,6 +338,7 @@ type Product = {
   wholesale_price?: number | null; min_selling_price?: number | null;
   /** pcv = Pet Care Vet, ss = Sasthya Seba (missing on an older database = pcv). */
   project?: string | null;
+  no_stock?: boolean | null;
 };
 type CartLine = {
   product_id: string; name: string; unit_price: number; quantity: number; discount: number; tax_percent: number;
@@ -373,11 +374,17 @@ const CART_STORAGE_KEY = "pos-cart-draft-v1";
 // POS product list (also re-read right before a bill is saved, so prices are never stale).
 async function loadPosProducts(): Promise<Product[]> {
   // The project column comes with the Projects SQL; before it everything is Pet Care Vet.
-  return withSchemaFallback(
-    "products.project",
-    () => loadPosProductsWith(",project"),
-    () => loadPosProductsWith(""),
+  // Bulk / Mixed products (no_stock) are made into mini packs, never sold here.
+  const all = await withSchemaFallback(
+    "products.no_stock",
+    () => loadPosProductsWith(",project,no_stock"),
+    () => withSchemaFallback(
+      "products.project",
+      () => loadPosProductsWith(",project"),
+      () => loadPosProductsWith(""),
+    ),
   );
+  return all.filter((p) => !p.no_stock);
 }
 async function loadPosProductsWith(extra: string): Promise<Product[]> {
   const base = `id,name,sku,barcode,category,selling_price,tax_percent,stock_quantity,unit,low_stock_threshold,image_url${extra}`;

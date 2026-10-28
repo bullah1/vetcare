@@ -22,18 +22,18 @@ import { PurchaseItemSearch, type SearchProduct } from "@/components/PurchaseIte
 import { todayDhaka } from "@/lib/sales-ledger";
 import { cn } from "@/lib/utils";
 import {
-  exactUnitPrice, fmtField, invoiceTotals, lineAmounts, lineError, num, onQuantity, onTotal, onUnitPrice,
+  averageCost, chargeShares, exactUnitPrice, fmtField, invoiceTotals, landedUnitCost, lineAmounts, lineError, num, onQuantity, onTotal, onUnitPrice,
   type AmountKind, type LineInput,
 } from "@/lib/purchase-calc";
 
-export type EntryProduct = SearchProduct & { selling_price: number };
+export type EntryProduct = SearchProduct & { selling_price: number; no_stock?: boolean | null };
 export type EntrySupplier = { id: string; name: string; phone: string | null; balance_due: number };
 
 /** An existing purchase opened for editing. */
 export type EditPurchase = {
   id: string; invoice_no: string; supplier_id: string | null; supplier_invoice_no: string | null; invoice_date: string;
   discount: number; vat: number; freight: number; notes: string | null; stock_only: boolean; paid: number;
-  items: { product_id: string; quantity: number; discount: number; line_total: number; batch_no: string | null; expiry_date: string | null }[];
+  items: { product_id: string; quantity: number; discount: number; line_total: number; batch_no: string | null; expiry_date: string | null; no_stock?: boolean }[];
 };
 
 type Row = LineInput & {
@@ -42,8 +42,13 @@ type Row = LineInput & {
   new_selling_price: string;
   batch_no: string;
   expiry_date: string;
+  /** Amount only — this line does not add stock (Bulk / Mixed goods). */
+  no_stock: boolean;
   open?: boolean;
 };
+
+/** Cost preview of a line: its courier share, landed unit cost and the new average. */
+type CostInfo = { share: number; landed: number; avg: number | null; jump: number | null };
 
 const money = (n: number) => `৳${Number(n || 0).toLocaleString("en-BD", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const qtyFmt = (n: number) => Number(n || 0).toLocaleString("en-BD", { maximumFractionDigits: 2 });
@@ -84,6 +89,7 @@ export function PurchaseEntryDialog({
       key: newKey(), product_id: it.product_id,
       new_selling_price: p?.selling_price ? String(p.selling_price) : "",
       batch_no: it.batch_no ?? "", expiry_date: it.expiry_date ?? "",
+      no_stock: !!it.no_stock || !!p?.no_stock,
     };
   }));
 
@@ -112,6 +118,31 @@ export function PurchaseEntryDialog({
     [rows, discValue, discKind, vatValue, vatKind, charges],
   );
   const dirty = editing ? true : rows.length > 0 || !!entryProduct;
+
+  // Courier / additional charges split by line amount, landed cost and the
+  // weighted average each product will get (same maths as the server).
+  // When editing, the shelf stock still includes this purchase's old lines.
+  const costInfo = useMemo(() => {
+    const finals = rows.map((r) => lineAmounts(r).final);
+    const shares = chargeShares(finals, totals.charges);
+    const oldQty = new Map<string, number>();
+    for (const it of editing?.items ?? []) if (!it.no_stock) oldQty.set(it.product_id, (oldQty.get(it.product_id) ?? 0) + Number(it.quantity));
+    const map = new Map<string, CostInfo>();
+    rows.forEach((r, i) => {
+      const q = num(r.quantity) ?? 0;
+      const landed = landedUnitCost(finals[i], shares[i], q);
+      const p = productById.get(r.product_id);
+      let avg: number | null = null;
+      if (!r.no_stock && p) {
+        const onShelf = Number(p.stock_quantity) - (oldQty.get(r.product_id) ?? 0);
+        avg = averageCost(onShelf, Number(p.purchase_price), q, landed);
+      }
+      const last = Number(p?.purchase_price) || 0;
+      const jump = last > 0 && landed > 0 ? ((landed - last) / last) * 100 : null;
+      map.set(r.key, { share: shares[i], landed, avg, jump });
+    });
+    return map;
+  }, [rows, totals.charges, productById, editing]);
 
   // ---------- entry bar ----------
   const pickProduct = (p: SearchProduct) => {
@@ -160,6 +191,7 @@ export function PurchaseEntryDialog({
       return [...prev, {
         ...entry, key: newKey(), product_id: p.id,
         new_selling_price: p.selling_price ? String(p.selling_price) : "", batch_no: "", expiry_date: "",
+        no_stock: !!p.no_stock,
       }];
     }));
     flushSync(() => {
@@ -201,6 +233,7 @@ export function PurchaseEntryDialog({
         disc_kind: "amt",
         key: newKey(), product_id: l.product_id,
         new_selling_price: l.new_selling_price, batch_no: l.batch_no, expiry_date: l.expiry_date,
+        no_stock: !!productById.get(l.product_id)?.no_stock,
       })),
     ]);
   };
@@ -226,6 +259,8 @@ export function PurchaseEntryDialog({
         new_selling_price: num(r.new_selling_price),
         batch_no: r.batch_no.trim() || null,
         expiry_date: r.expiry_date || null,
+        // Older databases ignore it (everything adds stock there).
+        ...(r.no_stock ? { no_stock: true } : {}),
       }));
 
       if (editing) {
@@ -402,7 +437,7 @@ export function PurchaseEntryDialog({
                   const a = lineAmounts(r);
                   const err = lineError(r);
                   return (
-                    <RowView key={r.key} r={r} i={i} p={p} a={a} err={err}
+                    <RowView key={r.key} r={r} i={i} p={p} a={a} err={err} cost={costInfo.get(r.key)}
                       onChange={(fn) => updateRow(r.key, fn)} onRemove={() => removeRow(r.key)} />
                   );
                 })}
@@ -424,7 +459,8 @@ export function PurchaseEntryDialog({
             <TotalLine label="Item discount" value={totals.itemDiscount ? `− ${money(totals.itemDiscount)}` : money(0)} muted />
             <AmountLine label="Overall discount" value={discValue} kind={discKind} onValue={setDiscValue} onKind={setDiscKind} result={totals.overallDiscount ? `− ${money(totals.overallDiscount)}` : money(0)} />
             <AmountLine label="VAT / tax" value={vatValue} kind={vatKind} onValue={setVatValue} onKind={setVatKind} result={money(totals.vat)} />
-            <AmountLine label="Additional charges" value={charges} onValue={setCharges} result={money(totals.charges)} />
+            <AmountLine label="Courier / other charges" value={charges} onValue={setCharges} result={money(totals.charges)} />
+            {totals.charges > 0 && <p className="text-right text-[11px] text-muted-foreground">Split over the products by amount % and added to their cost.</p>}
             <div className="flex items-baseline justify-between border-t pt-2">
               <span className="font-semibold">Purchase total</span>
               <span className="text-2xl font-bold tabular-nums">{money(totals.net)}</span>
@@ -432,7 +468,7 @@ export function PurchaseEntryDialog({
             <p className="rounded-md bg-muted/60 px-2.5 py-1.5 text-xs text-muted-foreground">
               {editing
                 ? <>Saving changes stock by the difference only (same invoice number).{!editing.stock_only && Number(editing.paid) > 0 ? ` Paid ${money(Number(editing.paid))} stays; the supplier due is recalculated.` : ""}</>
-                : "Stock only: products go into stock. No payment, cash or supplier due is recorded — accounts are kept separately."}
+                : "Stock only: products go into stock (\"No stock\" lines record the amount only). Cost = weighted average. No payment, cash or supplier due is recorded."}
             </p>
             <div className="flex gap-2 pt-1">
               <Button type="button" variant="outline" className="flex-1" onClick={() => requestClose(false)} disabled={create.isPending}>Cancel</Button>
@@ -470,8 +506,8 @@ function Kbd({ children }: { children: ReactNode }) {
 const cellInput =
   "h-8 w-full rounded-md border border-transparent bg-transparent px-2 text-right tabular-nums outline-none hover:border-input focus:border-primary focus:bg-background focus:ring-2 focus:ring-primary/20";
 
-function RowView({ r, i, p, a, err, onChange, onRemove }: {
-  r: Row; i: number; p?: EntryProduct; a: { gross: number; discount: number; final: number }; err: string | null;
+function RowView({ r, i, p, a, err, cost, onChange, onRemove }: {
+  r: Row; i: number; p?: EntryProduct; a: { gross: number; discount: number; final: number }; err: string | null; cost?: CostInfo;
   onChange: (fn: (r: Row) => Row) => void; onRemove: () => void;
 }) {
   // Enter inside a table cell just leaves the cell; it never saves the invoice.
@@ -483,9 +519,27 @@ function RowView({ r, i, p, a, err, onChange, onRemove }: {
       <tr className={cn("border-b align-middle", err && "bg-destructive/5")}>
         <td className="py-1.5 pl-4 text-xs text-muted-foreground tabular-nums">{i + 1}</td>
         <td className="min-w-0 py-1.5 pr-2">
-          <div className="truncate font-medium">{p?.name ?? "Unknown product"}</div>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate font-medium">{p?.name ?? "Unknown product"}</span>
+            <button type="button" onClick={() => onChange((x) => ({ ...x, no_stock: !x.no_stock }))}
+              aria-pressed={r.no_stock}
+              title={r.no_stock ? "Amount only — stock is not added. Click to add stock." : "Adds stock. Click for amount only (Bulk / Mixed)."}
+              className={cn("shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold",
+                r.no_stock ? "border-amber-300 bg-amber-50 text-amber-800" : "border-transparent text-muted-foreground hover:border-input")}>
+              {r.no_stock ? "No stock" : "+ Stock"}
+            </button>
+          </div>
           <div className="truncate text-xs text-muted-foreground">
-            {[p?.sku && `SKU ${p.sku}`, r.batch_no && `Batch ${r.batch_no}`, r.expiry_date && `Exp ${r.expiry_date}`].filter(Boolean).join("   ") || " "}
+            {[p?.sku && `SKU ${p.sku}`, r.batch_no && `Batch ${r.batch_no}`, r.expiry_date && `Exp ${r.expiry_date}`].filter(Boolean).join("   ")}
+            {cost && cost.landed > 0 && (
+              <span className={cn(p?.sku || r.batch_no || r.expiry_date ? "ml-3" : "")}>
+                Cost ৳{qtyFmt(cost.landed)}{cost.share > 0 ? ` (incl. courier ৳${qtyFmt(cost.share)})` : ""}
+                {cost.avg != null && Number(p?.stock_quantity) > 0 && Math.abs(cost.avg - cost.landed) > 0.005 && <> · new average ৳{qtyFmt(cost.avg)}</>}
+                {cost.jump != null && Math.abs(cost.jump) > 20 && (
+                  <span className="ml-2 font-medium text-amber-700">{cost.jump > 0 ? "▲" : "▼"} {Math.abs(cost.jump).toFixed(0)}% vs last cost ৳{qtyFmt(Number(p?.purchase_price))}</span>
+                )}
+              </span>
+            )}
             {err && <span className="ml-2 font-medium text-destructive">{err}</span>}
           </div>
         </td>

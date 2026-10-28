@@ -1,3 +1,4 @@
+import { withSchemaFallback } from "@/lib/schema-fallback";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Truck, Plus, Trash2, Eye, RotateCcw, Wallet, Printer, X, Barcode, Upload, Pencil } from "lucide-react";
@@ -5,6 +6,7 @@ import { BarcodeLabelDialog, type LabelProduct } from "@/components/BarcodeLabel
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -120,7 +122,7 @@ function printPaymentReceipt(r: PaymentReceipt) {
   w.document.close();
 }
 
-type Product = { id: string; name: string; sku: string | null; barcode: string | null; unit: string | null; selling_price: number; purchase_price: number; stock_quantity: number };
+type Product = { id: string; name: string; sku: string | null; barcode: string | null; unit: string | null; selling_price: number; purchase_price: number; stock_quantity: number; no_stock?: boolean | null };
 type Supplier = { id: string; name: string; phone: string | null; balance_due: number };
 type Invoice = {
   id: string; invoice_no: string; supplier_invoice_no: string | null; supplier_id: string | null;
@@ -137,7 +139,7 @@ function PurchasesPage() {
   const isAdmin = hasRole("admin");
   const openEdit = async (inv: Invoice) => {
     const { data, error } = await supabase.from("purchase_invoice_items")
-      .select("product_id,quantity,discount,line_total,batch_no,expiry_date,returned_quantity").eq("invoice_id", inv.id).order("created_at");
+      .select("*").eq("invoice_id", inv.id).order("created_at");
     if (error) { toast.error(error.message); return; }
     if ((data ?? []).some((r: any) => Number(r.returned_quantity) > 0)) { toast.error("This purchase has a return, so it cannot be edited."); return; }
     setEditPurchase({
@@ -146,7 +148,7 @@ function PurchasesPage() {
       notes: inv.notes, stock_only: !!inv.stock_only, paid: Number(inv.paid),
       items: (data ?? []).filter((r: any) => r.product_id).map((r: any) => ({
         product_id: r.product_id, quantity: Number(r.quantity), discount: Number(r.discount), line_total: Number(r.line_total),
-        batch_no: r.batch_no, expiry_date: r.expiry_date,
+        batch_no: r.batch_no, expiry_date: r.expiry_date, no_stock: !!r.no_stock,
       })),
     });
   };
@@ -182,11 +184,14 @@ function PurchasesPage() {
   const { data: products = [] } = useQuery({
     queryKey: ["products-purchase"],
     queryFn: async () => {
-      const data = await fetchAll<any>(() => supabase
+      // no_stock (Bulk / Mixed) comes with the purchase costing SQL.
+      const read = (cols: string) => fetchAll<any>(() => (supabase as any)
         .from("products")
-        .select("id,name,sku,barcode,unit,selling_price,purchase_price,stock_quantity")
+        .select(cols)
         .order("name")
         .order("id"));
+      const base = "id,name,sku,barcode,unit,selling_price,purchase_price,stock_quantity";
+      const data = await withSchemaFallback("products.no_stock", () => read(`${base},no_stock`), () => read(base));
       return (data ?? []) as Product[];
     },
   });
@@ -571,9 +576,17 @@ function ViewInvoiceDialog({ invoiceId, onClose }: { invoiceId: string; onClose:
                 <TableBody>
                   {items.map(it => (
                     <TableRow key={it.id}>
-                      <TableCell>{it.name}</TableCell>
+                      <TableCell>
+                        {it.name}
+                        {it.no_stock && <Badge variant="outline" className="ml-2 border-amber-300 bg-amber-50 text-[10px] text-amber-800">No stock</Badge>}
+                      </TableCell>
                       <TableCell className="text-right">{it.quantity}</TableCell>
-                      <TableCell className="text-right">{fmt(Number(it.purchase_price))}</TableCell>
+                      <TableCell className="text-right">
+                        {fmt(Number(it.purchase_price))}
+                        {it.landed_cost != null && Math.abs(Number(it.landed_cost) - Number(it.purchase_price)) > 0.004 && (
+                          <div className="text-[11px] text-muted-foreground">with courier {fmt(Number(it.landed_cost))}</div>
+                        )}
+                      </TableCell>
                       <TableCell className="text-right">{fmt(Number(it.discount))}</TableCell>
                       <TableCell className="text-right">{fmt(Number(it.line_total))}</TableCell>
                       <TableCell className="text-xs">{it.batch_no ?? "—"}</TableCell>

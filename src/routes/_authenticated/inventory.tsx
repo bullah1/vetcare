@@ -112,6 +112,8 @@ type Product = {
   tax_percent: number; stock_quantity: number; low_stock_threshold: number;
   is_active: boolean; description: string | null; image_url: string | null;
   project?: string | null; category_id?: string | null;
+  /** Bulk / Mixed: purchases record the amount only, never stock. */
+  no_stock?: boolean | null;
 };
 
 function ProductsTab() {
@@ -369,7 +371,7 @@ function ProductsTab() {
           <DialogTrigger asChild>
             <Button><Plus className="h-4 w-4" /> New product</Button>
           </DialogTrigger>
-          <ProductDialog key={editing?.id ?? `new-${projectFilter}`} product={editing} defaultProject={projectFilter === "all" ? "pcv" : projectFilter} onDone={() => setOpen(false)} />
+          <ProductDialog key={editing?.id ?? `new-${projectFilter}`} product={editing} defaultProject={projectFilter === "all" ? "pcv" : projectFilter} hasNoStock={products.length > 0 && "no_stock" in products[0]} onDone={() => setOpen(false)} />
         </Dialog>
       </div>
 
@@ -538,6 +540,7 @@ function ProductsTab() {
                         <ProductThumb path={p.image_url} name={p.name} />
                         <HighlightText text={p.name} ranges={searchRanges.get(p.id)} />
                         {!p.is_active && <Badge variant="secondary" className="ml-1">Inactive</Badge>}
+                        {p.no_stock && <Badge variant="outline" className="ml-1 border-amber-300 bg-amber-50 text-amber-800">Bulk</Badge>}
                       </div>
                     </TableCell>
                     <TableCell>
@@ -730,7 +733,22 @@ function QuickAdjustDialog({ product, onOpenChange }: { product: Product | null;
   );
 }
 
-function ProductDialog({ product, defaultProject = "pcv", onDone }: { product: Product | null; defaultProject?: Project; onDone: () => void }) {
+function ProductDialog({ product, defaultProject = "pcv", hasNoStock = false, onDone }: { product: Product | null; defaultProject?: Project; hasNoStock?: boolean; onDone: () => void }) {
+  const [noStock, setNoStock] = useState<boolean>(!!product?.no_stock);
+  // Mini pack cost helper: what the bulk goods cost ÷ how many packs.
+  const [packCost, setPackCost] = useState("");
+  const [packCount, setPackCount] = useState("");
+  const packUnit = Number(packCost) > 0 && Number(packCount) > 0 ? Number(packCost) / Number(packCount) : null;
+  const historyQ = useQuery({
+    queryKey: ["cost-history", product?.id],
+    enabled: !!product?.id && hasNoStock,
+    queryFn: async () => {
+      const { data, error } = await (supabase as any).from("product_cost_history")
+        .select("old_cost,new_cost,quantity,unit_cost,source,ref_no,created_at").eq("product_id", product!.id)
+        .order("created_at", { ascending: false }).limit(10);
+      return error ? [] : (data ?? []) as { old_cost: number | null; new_cost: number; quantity: number | null; unit_cost: number | null; source: string; ref_no: string | null; created_at: string }[];
+    },
+  });
   const qc = useQueryClient();
   const { available: hasCats, cats } = useProductCategories();
   const activeCats = cats.filter((c) => c.is_active || c.id === product?.category_id);
@@ -787,6 +805,7 @@ function ProductDialog({ product, defaultProject = "pcv", onDone }: { product: P
         dose_form: form.is_prescribable ? form.dose_form : null,
         dose_unit: form.is_prescribable && form.dose_unit.trim() ? form.dose_unit.trim() : null,
       };
+      if (hasNoStock) payload.no_stock = noStock;
       if (hasCats) {
         // Category is optional; when set it must be of the same business (the server keeps them in step).
         payload.project = business;
@@ -961,9 +980,46 @@ function ProductDialog({ product, defaultProject = "pcv", onDone }: { product: P
             )}
           </div>
         </div>
+        {hasNoStock && (
+          <label className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50/50 p-3 text-sm sm:col-span-2 dark:bg-amber-950/10">
+            <input type="checkbox" className="mt-0.5 h-4 w-4 accent-primary" checked={noStock} onChange={(e) => setNoStock(e.target.checked)} />
+            <span>
+              <span className="font-medium">Bulk / Mixed — purchase does not add stock</span>
+              <span className="block text-xs text-muted-foreground">For big bags mixed into mini packs. Purchases record the amount only and it is hidden in POS. Set its stock to 0 once — purchases never add to it.</span>
+            </span>
+          </label>
+        )}
         <div className="space-y-2">
           <Label>Purchase price</Label>
           <Input type="number" step="0.01" value={form.purchase_price} onChange={(e) => setForm({ ...form, purchase_price: Number(e.target.value) })} />
+          {!noStock && (
+            <details className="text-xs text-muted-foreground">
+              <summary className="cursor-pointer select-none">Mini pack cost helper</summary>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <span>Cost of goods used ৳</span>
+                <Input className="h-7 w-24" inputMode="decimal" value={packCost} onChange={(e) => setPackCost(e.target.value)} aria-label="Cost of goods used" />
+                <span>÷ packs</span>
+                <Input className="h-7 w-16" inputMode="decimal" value={packCount} onChange={(e) => setPackCount(e.target.value)} aria-label="Number of packs" />
+                <span>= {packUnit != null ? <b className="text-foreground">৳{packUnit.toFixed(2)}</b> : "—"}</span>
+                {packUnit != null && (
+                  <Button type="button" size="sm" variant="outline" className="h-7" onClick={() => setForm({ ...form, purchase_price: Number(packUnit.toFixed(2)) })}>Use</Button>
+                )}
+              </div>
+            </details>
+          )}
+          {(historyQ.data?.length ?? 0) > 0 && (
+            <details className="text-xs text-muted-foreground">
+              <summary className="cursor-pointer select-none">Cost history</summary>
+              <ul className="mt-1 space-y-0.5">
+                {historyQ.data!.map((h, i) => (
+                  <li key={i} className="tabular-nums">
+                    {h.created_at.slice(0, 10)} · {h.ref_no ?? h.source.replace(/_/g, " ")} · ৳{Number(h.old_cost ?? 0).toFixed(2)} → <b className="text-foreground">৳{Number(h.new_cost).toFixed(2)}</b>
+                    {h.quantity != null && h.unit_cost != null && <> ({Number(h.quantity) > 0 ? "+" : ""}{Number(h.quantity)} @ ৳{Number(h.unit_cost).toFixed(2)})</>}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </div>
         <div className="space-y-2">
           <Label>Selling price</Label>
@@ -1015,6 +1071,7 @@ function ProductDialog({ product, defaultProject = "pcv", onDone }: { product: P
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="correction">Manual correction</SelectItem>
+                      {hasNoStock && <SelectItem value="repack">Mini packs made (repack)</SelectItem>}
                       <SelectItem value="found">Found / extra</SelectItem>
                       <SelectItem value="damage">Damaged / broken</SelectItem>
                       <SelectItem value="loss">Lost / missing</SelectItem>
