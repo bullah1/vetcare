@@ -81,18 +81,19 @@ function ReportsPage() {
   // Sales, returns and cost of goods come from the same engine as the Business
   // Report, so this page, the Dashboard and the Analysis page always agree.
   const engineQ = useQuery({ queryKey: ["business-report", from, to], queryFn: () => loadPeriod({ from, to }), staleTime: 60_000 });
+  const engine = useMemo(() => (engineQ.data ? computePeriod(engineQ.data) : null), [engineQ.data]);
   const summary = useMemo(() => {
     const daily = new Map<string, { gross: number; refund: number; rev: number; cogs: number }>();
     const totals = { gross: 0, refund: 0, rev: 0, cogs: 0 };
-    if (engineQ.data) {
-      for (const r of computePeriod(engineQ.data).daily) {
+    if (engine) {
+      for (const r of engine.daily) {
         const row = { gross: r.sales, refund: r.reversals, rev: r.net, cogs: r.cogs };
         daily.set(r.day, row);
         totals.gross += row.gross; totals.refund += row.refund; totals.rev += row.rev; totals.cogs += row.cogs;
       }
     }
     return { daily, totals };
-  }, [engineQ.data]);
+  }, [engine]);
   const liveItems = items;
 
   // Invoice-level discount is not stored on the line items, so spread it across
@@ -174,8 +175,12 @@ function ReportsPage() {
     const { gross: grossSell, refund: refunds, rev, cogs } = summary.totals;
     const purch = daily.reduce((a, [, row]) => a + row.purch, 0);
     const opex = daily.reduce((a, [, row]) => a + row.opex, 0);
-    return { grossSell, rev, refunds, cogs, purch, opex, gross: rev - cogs, profit: rev - cogs - opex };
-  }, [summary, daily]);
+    // Net profit exactly as Business Report / Analysis / Dashboard: also counts
+    // delivery income − delivery cost and stock written off (damaged / expired / lost).
+    const delivery = engine?.delivery.net ?? 0;
+    const writtenOff = engine?.stockAdj.loss ?? 0;
+    return { grossSell, rev, refunds, cogs, purch, opex, delivery, writtenOff, gross: rev - cogs, profit: rev - cogs - opex + delivery - writtenOff };
+  }, [summary, daily, engine]);
 
   // Monthly aggregation of the same day rows the P&L uses — identical logic,
   // just bucketed by calendar month (oldest first).
@@ -282,7 +287,7 @@ function ReportsPage() {
         <Card><CardContent className="p-3 sm:p-4"><div className="text-xs text-muted-foreground">Gross Profit</div><div className={`break-words text-lg font-semibold sm:text-2xl ${totals.gross >= 0 ? "text-emerald-600" : "text-destructive"}`}>{fmt(totals.gross)}</div><div className="mt-1 text-[11px] text-muted-foreground">sell − purchase cost</div></CardContent></Card>
         <Card><CardContent className="p-3 sm:p-4"><div className="text-xs text-muted-foreground">Avg Gross Margin</div><div className={`break-words text-lg font-semibold sm:text-2xl ${totals.gross >= 0 ? "text-emerald-600" : "text-destructive"}`}>{totals.rev > 0 ? `${((totals.gross / totals.rev) * 100).toFixed(1)}%` : "—"}</div><div className="mt-1 text-[11px] text-muted-foreground">gross profit / sell value</div></CardContent></Card>
         <Card><CardContent className="p-3 sm:p-4"><div className="text-xs text-muted-foreground">Operating Exp.</div><div className="break-words text-lg font-semibold text-destructive sm:text-2xl">{fmt(totals.opex)}</div></CardContent></Card>
-        <Card><CardContent className="p-3 sm:p-4"><div className="text-xs text-muted-foreground">Net Profit</div><div className={`break-words text-lg font-semibold sm:text-2xl ${totals.profit >= 0 ? "text-emerald-600" : "text-destructive"}`}>{fmt(totals.profit)}</div></CardContent></Card>
+        <Card><CardContent className="p-3 sm:p-4"><div className="text-xs text-muted-foreground">Net Profit</div><div className={`break-words text-lg font-semibold sm:text-2xl ${totals.profit >= 0 ? "text-emerald-600" : "text-destructive"}`}>{fmt(totals.profit)}</div><div className="mt-1 text-[11px] text-muted-foreground">gross − expenses{Math.abs(totals.delivery) > 0.5 ? ` ${totals.delivery >= 0 ? "+" : "−"} delivery ${fmt(Math.abs(totals.delivery))}` : ""}{totals.writtenOff > 0.5 ? ` − written off ${fmt(totals.writtenOff)}` : ""}</div></CardContent></Card>
         <Card><CardContent className="p-3 sm:p-4"><div className="text-xs text-muted-foreground">Avg Net Margin</div><div className={`break-words text-lg font-semibold sm:text-2xl ${totals.profit >= 0 ? "text-emerald-600" : "text-destructive"}`}>{totals.rev > 0 ? `${((totals.profit / totals.rev) * 100).toFixed(1)}%` : "—"}</div><div className="mt-1 text-[11px] text-muted-foreground">net profit / sell value</div></CardContent></Card>
         <Card><CardContent className="p-3 sm:p-4"><div className="text-xs text-muted-foreground">Purchases (stock in)</div><div className="break-words text-lg font-semibold sm:text-2xl">{fmt(totals.purch)}</div><div className="mt-1 text-[11px] text-muted-foreground">not counted in profit</div></CardContent></Card>
       </div>
