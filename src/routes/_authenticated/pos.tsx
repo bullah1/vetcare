@@ -354,6 +354,23 @@ type Owner = { id: string; full_name: string; phone: string | null; address?: st
 
 
 const METHODS = ["cash", "bkash", "nagad", "rocket", "card", "bank", "due"] as const;
+type PayMethod = Exclude<(typeof METHODS)[number], "due">;
+const PAY_METHODS = METHODS.filter((m): m is PayMethod => m !== "due");
+
+/** What the customer hands over, per method. Empty "Received" = the rest of the bill. */
+function tenderList(
+  method: (typeof METHODS)[number], paidAmount: number | "", extras: { method: PayMethod; amount: number | "" }[], billTotal: number,
+): { method: string; amount: number }[] {
+  if (method === "due") return [];
+  const others = extras.map((e) => ({ method: e.method, amount: Number(e.amount) || 0 })).filter((e) => e.amount > 0);
+  const otherSum = others.reduce((t, e) => t + e.amount, 0);
+  const main = paidAmount === "" ? Math.max(Math.round((billTotal - otherSum) * 100) / 100, 0) : Number(paidAmount);
+  // Same method twice → one payment line.
+  const merged = new Map<string, number>();
+  for (const p of [{ method, amount: main }, ...others]) if (p.amount > 0) merged.set(p.method, (merged.get(p.method) ?? 0) + p.amount);
+  // Cash last, so change is given from cash.
+  return [...merged.entries()].map(([m, a]) => ({ method: m, amount: a })).sort((a, b) => Number(a.method === "cash") - Number(b.method === "cash"));
+}
 
 /** Labels shown in the payment method picker. `due` = COD / online delivery bill kept unpaid. */
 const METHOD_LABELS: Record<(typeof METHODS)[number], string> = {
@@ -410,6 +427,9 @@ function POSPage() {
   const [discount, setDiscount] = useState(0);
   const [method, setMethod] = useState<(typeof METHODS)[number]>("cash");
   const [paidAmount, setPaidAmount] = useState<number | "">("");
+  // Split payment: more methods on the same bill (e.g. part bKash, part cash).
+  // The first method uses "Received"; these are the others.
+  const [extraPays, setExtraPays] = useState<{ method: PayMethod; amount: number | "" }[]>([]);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
   const [sheetQ, setSheetQ] = useState("");
@@ -1140,10 +1160,10 @@ function POSPage() {
         if (!delManId) throw new Error("Choose a delivery man (or turn Delivery off)");
         if (!(Number(delCharge || 0) >= 0)) throw new Error("Delivery charge must be 0 or more");
       }
-      const tendered = paidAmount === "" ? grandTotal : Number(paidAmount);
       // This bill is paid first; anything more clears the customer's older dues
       // (oldest first). Only what is left after that is change.
-      const split = splitPayments(method === "due" ? [] : [{ method, amount: tendered }], grandTotal, ownerId ? prevDue : 0);
+      const tender = tenderList(method, paidAmount, extraPays, grandTotal);
+      const split = splitPayments(tender, grandTotal, ownerId ? prevDue : 0);
       const paid = split.billPaid;
       if (grandTotal - paid > 0.009 && !ownerId) {
         throw new Error("Select a customer for a due sale — the due must be assigned to someone.");
@@ -1156,7 +1176,8 @@ function POSPage() {
       if (delOn && delChargeNum > 0) {
         items.push({ product_id: null, name: DELIVERY_LINE_NAME, quantity: 1, unit_price: delChargeNum, discount: 0, tax: 0 });
       }
-      const payments = method === "due" ? [] : [{ method, amount: paid, reference: null }];
+      // One payment per method (split payment = several).
+      const payments = split.bill.map((p) => ({ method: p.method, amount: p.amount, reference: null }));
 
       const args = { _owner_id: ownerId || null, _items: items, _payments: payments, _discount: totals.discount, _notes: null };
       const wrong = cart.find((l) => { const p = byId.get(l.product_id); return p && asProject(p.project) !== project; });
@@ -1188,7 +1209,8 @@ function POSPage() {
         subtotal: totals.sub + (delOn ? delChargeNum : 0),
         tax: totals.tax,
         discount: totals.discount,
-        method,
+        method: payments.length > 1 ? payments.map((p) => p.method).join(" + ") : payments[0]?.method ?? method,
+        payments: payments.map((p) => ({ method: p.method, amount: p.amount, reference: null })),
         issued_at: new Date().toISOString(),
         owner: ownerObj ? { full_name: ownerObj.full_name, phone: ownerObj.phone } : null,
         items: items.map((it) => ({
@@ -1246,7 +1268,7 @@ function POSPage() {
       setReceipt(r);
       // Send the invoice to the customer's WhatsApp automatically (Cloud API).
       void sendWhatsApp(r, r.sale_id, { auto: true });
-      setCart([]); setDiscount(0); setPaidAmount(""); setOwnerId(""); setResumedBill(null); setCartOpen(false);
+      setCart([]); setDiscount(0); setPaidAmount(""); setExtraPays([]); setOwnerId(""); setResumedBill(null); setCartOpen(false);
       resetDelivery();
       qc.invalidateQueries({ queryKey: ["held-bills"] });
       qc.invalidateQueries({ queryKey: ["held-bills-count"] });
@@ -1287,7 +1309,7 @@ function POSPage() {
   };
 
   const clearCart = () => {
-    setCart([]); setDiscount(0); setPaidAmount(""); setOwnerId(""); setResumedBill(null);
+    setCart([]); setDiscount(0); setPaidAmount(""); setExtraPays([]); setOwnerId(""); setResumedBill(null);
   };
 
   const holdBill = useMutation({
@@ -1427,10 +1449,12 @@ function POSPage() {
 
   const renderCartBody = (isDesk: boolean) => {
     const owed = ownerId ? prevDue : 0;
-    const sp = splitPayments(method === "due" ? [] : [{ method, amount: paidAmount === "" ? grandTotal : Number(paidAmount) }], grandTotal, owed);
+    const sp = splitPayments(tenderList(method, paidAmount, extraPays, grandTotal), grandTotal, owed);
+    const splitOn = method !== "due" && extraPays.length > 0;
+    const extraSum = extraPays.reduce((t, e) => t + (Number(e.amount) || 0), 0);
     const paidNow = sp.billPaid;
     const dueNow = Math.max(0, grandTotal - paidNow);
-    const change = method !== "due" && paidAmount !== "" ? sp.change : 0;
+    const change = method !== "due" && (paidAmount !== "" || splitOn) ? sp.change : 0;
     const billTotal = grandTotal;
     const delId = `del-on-${isDesk ? "d" : "m"}`;
     return (
@@ -1657,7 +1681,7 @@ function POSPage() {
               type="button"
               role="radio"
               aria-checked={method === m}
-              onClick={() => setMethod(m)}
+              onClick={() => { setMethod(m); if (m === "due") setExtraPays([]); }}
               className={`h-8 rounded-md border px-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                 method === m ? "border-primary bg-primary text-primary-foreground" : "bg-background hover:bg-muted"
               }`}
@@ -1667,7 +1691,7 @@ function POSPage() {
           ))}
         </div>
         <div className="relative">
-          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">Received</span>
+          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{splitOn ? METHOD_LABELS[method] : "Received"}</span>
           <Input
             ref={isDesk ? paidRef : undefined}
             className="h-11 pl-20 text-right text-base font-semibold tabular-nums"
@@ -1683,10 +1707,60 @@ function POSPage() {
               }
               if (e.key === "Escape") { e.preventDefault(); focusSearch(); }
             }}
-            placeholder={method === "due" ? "Not paid now" : grandTotal.toFixed(2)}
+            placeholder={method === "due" ? "Not paid now" : Math.max(grandTotal - extraSum, 0).toFixed(2)}
             disabled={method === "due"}
           />
         </div>
+        {extraPays.map((e, i) => (
+          <div key={i} className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)_auto] gap-1.5">
+            <select
+              aria-label={`Split payment ${i + 2} method`}
+              className="h-10 rounded-md border bg-background px-2 text-sm"
+              value={e.method}
+              onChange={(ev) => setExtraPays((list) => list.map((x, j) => (j === i ? { ...x, method: ev.target.value as PayMethod } : x)))}
+            >
+              {PAY_METHODS.map((m) => <option key={m} value={m}>{METHOD_LABELS[m]}</option>)}
+            </select>
+            <Input
+              aria-label={`Split payment ${i + 2} amount`}
+              className="h-10 text-right font-semibold tabular-nums"
+              type="number"
+              step="0.01"
+              value={e.amount}
+              onFocus={(ev) => ev.currentTarget.select()}
+              onChange={(ev) => setExtraPays((list) => list.map((x, j) => (j === i ? { ...x, amount: ev.target.value === "" ? "" : Number(ev.target.value) } : x)))}
+              onKeyDown={(ev) => {
+                if (ev.key === "Enter" && !checkout.isPending && cart.length > 0 && shiftOpen) { ev.preventDefault(); checkout.mutate(); }
+              }}
+            />
+            <Button type="button" size="icon" variant="ghost" className="h-10 w-9" aria-label="Remove this payment"
+              onClick={() => setExtraPays((list) => list.filter((_, j) => j !== i))}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        ))}
+        {method !== "due" && extraPays.length < 3 && (
+          <button
+            type="button"
+            className="text-xs font-medium text-primary hover:underline"
+            onClick={() => {
+              // Second method gets what is left after the first.
+              const first = paidAmount === "" ? 0 : Number(paidAmount);
+              const left = Math.max(Math.round((grandTotal - first - extraSum) * 100) / 100, 0);
+              const used = new Set([method, ...extraPays.map((x) => x.method)]);
+              const next = PAY_METHODS.find((m) => !used.has(m)) ?? "cash";
+              setExtraPays((list) => [...list, { method: next, amount: paidAmount === "" && list.length === 0 ? "" : left || "" }]);
+            }}
+          >
+            + Split payment (e.g. part bKash, part cash)
+          </button>
+        )}
+        {splitOn && (
+          <p className="flex justify-between text-xs text-muted-foreground">
+            <span>{tenderList(method, paidAmount, extraPays, grandTotal).map((p) => `${METHOD_LABELS[p.method as PayMethod] ?? p.method} ৳${p.amount.toFixed(0)}`).join(" + ")}</span>
+            <span className="tabular-nums">= ৳ {tenderList(method, paidAmount, extraPays, grandTotal).reduce((t, p) => t + p.amount, 0).toFixed(2)}</span>
+          </p>
+        )}
         {owed > 0.009 && (
           <div className="space-y-1 rounded-md border border-amber-300 bg-amber-50/70 p-2 text-sm dark:bg-amber-950/20">
             <div className="flex justify-between text-amber-900 dark:text-amber-200">
