@@ -406,17 +406,26 @@ async function loadPosProducts(): Promise<Product[]> {
   );
   return all.filter((p) => !p.no_stock);
 }
-async function loadPosProductsWith(extra: string): Promise<Product[]> {
+async function loadPosProductsWith(extra: string, ids?: string[]): Promise<Product[]> {
   const base = `id,name,sku,barcode,category,selling_price,tax_percent,stock_quantity,unit,low_stock_threshold,image_url${extra}`;
+  const scope = (q: any) => (ids ? q.in("id", ids) : q.eq("is_active", true));
   // Wholesale / minimum price columns may not exist yet on an older database.
   return withSchemaFallback(
     `products.b2b${extra}`,
-    () => fetchAll<Product>(() => (supabase as any).from("products")
-      .select(`${base},wholesale_price,min_selling_price`)
-      .eq("is_active", true).order("name").order("id")),
-    () => fetchAll<Product>(() => supabase.from("products")
-      .select(base)
-      .eq("is_active", true).order("name").order("id")),
+    () => fetchAll<Product>(() => scope((supabase as any).from("products")
+      .select(`${base},wholesale_price,min_selling_price`)).order("name").order("id")),
+    () => fetchAll<Product>(() => scope(supabase.from("products")
+      .select(base)).order("name").order("id")),
+  );
+}
+
+/** Just these products, fresh (prices / project check before a bill is saved). */
+async function loadPosProductsByIds(ids: string[]): Promise<Product[]> {
+  if (ids.length === 0) return [];
+  return withSchemaFallback(
+    "products.project",
+    () => loadPosProductsWith(",project", ids),
+    () => loadPosProductsWith("", ids),
   );
 }
 
@@ -532,6 +541,9 @@ function POSPage() {
 
   const { data: allProducts = [] } = useQuery({
     queryKey: ["pos-products"],
+    meta: { manualRefresh: true },
+    // Other counters' sales / purchases show up within 10 minutes; this counter's own sales update at once.
+    refetchInterval: 10 * 60_000,
     // Paged: the API returns at most 1000 rows per request.
     queryFn: loadPosProducts,
     staleTime: 5 * 60_000,
@@ -658,6 +670,7 @@ function POSPage() {
 
   const { data: expiryMap = {} } = useQuery({
     queryKey: ["pos-product-expiries"],
+    meta: { manualRefresh: true },
     queryFn: async () => {
       const today = dhakaDayKey(new Date());
       const data = await fetchAll(() => supabase.from("stock_batches")
@@ -680,6 +693,7 @@ function POSPage() {
 
   const { data: owners = [] } = useQuery({
     queryKey: ["owners"],
+    meta: { manualRefresh: true },
     queryFn: () =>
       withSchemaFallback(
         "pet_owners.customer_type",
@@ -693,6 +707,7 @@ function POSPage() {
 
   const { data: visitCountMap } = useQuery({
     queryKey: ["owner-visit-counts"],
+    meta: { manualRefresh: true },
     queryFn: async () => {
       const data = await fetchAll<{ owner_id: string; status: string }>(() => supabase
         .from("sales")
@@ -803,6 +818,7 @@ function POSPage() {
   // first, and among equally good matches the best seller wins.
   const { data: soldMap } = useQuery({
     queryKey: ["pos-best-sellers"],
+    meta: { manualRefresh: true },
     staleTime: 30 * 60_000,
     gcTime: 60 * 60_000,
     refetchOnWindowFocus: false,
@@ -1139,7 +1155,8 @@ function POSPage() {
           throw new Error(`This customer is now ${o.customer_type === "b2b" ? "B2B / wholesale" : "retail"} — prices were updated. Check the bill and press Charge again.`);
         }
       }
-      const fresh = await qc.fetchQuery({ queryKey: ["pos-products"], queryFn: loadPosProducts, staleTime: 0 });
+      // Re-read only the products in the cart (not the whole list).
+      const fresh = await loadPosProductsByIds([...new Set(cart.map((l) => l.product_id).filter(Boolean))] as string[]);
       const byId = new Map(fresh.map((p) => [p.id, p]));
       const changes: string[] = [];
       const repriced = cart.map((l) => {
@@ -1262,6 +1279,7 @@ function POSPage() {
       return snapshot;
     },
     onSuccess: (r) => {
+      const soldLines = cart; // still the sold cart here (cleared below)
       toast.success(
         Number(r.due) > 0.009
           ? `Bill ${r.invoice_no} saved as pending — ৳ ${Number(r.due).toFixed(2)} unpaid`
@@ -1273,15 +1291,11 @@ function POSPage() {
       void sendWhatsApp(r, r.sale_id, { auto: true });
       setCart([]); setDiscount(0); setPaidAmount(""); setExtraPays([]); setOwnerId(""); setResumedBill(null); setCartOpen(false);
       resetDelivery();
-      qc.invalidateQueries({ queryKey: ["held-bills"] });
-      qc.invalidateQueries({ queryKey: ["held-bills-count"] });
-      qc.invalidateQueries({ queryKey: ["pos-products"] });
-      qc.invalidateQueries({ queryKey: ["pos-product-expiries"] });
-      qc.invalidateQueries({ queryKey: ["products"] });
-      qc.invalidateQueries({ queryKey: ["dashboard"] });
-      qc.invalidateQueries({ queryKey: ["owner-visit-counts"] });
-      qc.invalidateQueries({ queryKey: ["customers-ledger"] });
-      qc.invalidateQueries({ queryKey: ["previous-due"] });
+      // Stock of what was just sold is lowered here — no need to reload the whole product list.
+      const sold = new Map<string, number>();
+      for (const l of soldLines) sold.set(l.product_id, (sold.get(l.product_id) ?? 0) + l.quantity);
+      qc.setQueryData<Product[]>(["pos-products"], (list) =>
+        list?.map((p) => (sold.has(p.id) ? { ...p, stock_quantity: Number(p.stock_quantity) - (sold.get(p.id) ?? 0) } : p)));
     },
     onError: (e: Error) => toast.error(e.message),
   });

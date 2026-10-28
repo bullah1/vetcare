@@ -1,7 +1,7 @@
 import { MutationCache, QueryClient } from "@tanstack/react-query";
 import { createRouter } from "@tanstack/react-router";
 import { routeTree } from "./routeTree.gen";
-import { setAppQueryClient } from "./lib/refresh-data";
+import { invalidateAfterWrite, setAppQueryClient } from "./lib/refresh-data";
 
 export const getRouter = () => {
   const queryClient: QueryClient = new QueryClient({
@@ -12,8 +12,11 @@ export const getRouter = () => {
     // Marking every cached query stale after any mutation fixes that; only
     // the queries on screen refetch immediately, the rest refetch on next view.
     mutationCache: new MutationCache({
+      // Big lists marked meta.manualRefresh (POS products, customers, best
+      // sellers…) are only marked stale: they reload next time the screen
+      // opens instead of on every sale, which made the POS slow.
       onSettled: () => {
-        void queryClient.invalidateQueries();
+        invalidateAfterWrite(queryClient);
       },
     }),
     defaultOptions: {
