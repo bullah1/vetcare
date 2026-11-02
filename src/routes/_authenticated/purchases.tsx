@@ -160,15 +160,28 @@ function PurchasesPage() {
   const [payFor, setPayFor] = useState<Invoice | null>(null);
   const [labelFor, setLabelFor] = useState<{ id: string; invoice_no: string } | null>(null);
   const [search, setSearch] = useState("");
+  // "all" or a month "YYYY-MM" (by invoice date).
+  const [month, setMonth] = useState<string>("all");
+  const monthOptions = useMemo(() => {
+    const out: string[] = [];
+    const d = new Date();
+    for (let i = 0; i < 24; i++) out.push(monthKey(new Date(d.getFullYear(), d.getMonth() - i, 1)));
+    return out;
+  }, []);
 
   const { data: invoices = [] } = useQuery({
-    queryKey: ["purchase_invoices"],
+    queryKey: ["purchase_invoices", month],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("purchase_invoices")
-        .select("*, suppliers(name)")
+      let q = supabase.from("purchase_invoices").select("*, suppliers(name)");
+      if (month !== "all") {
+        const [y, m] = month.split("-").map(Number);
+        const last = new Date(y, m, 0).getDate();
+        q = q.gte("invoice_date", `${month}-01`).lte("invoice_date", `${month}-${String(last).padStart(2, "0")}`);
+      }
+      const { data, error } = await q
+        .order("invoice_date", { ascending: false })
         .order("created_at", { ascending: false })
-        .limit(200);
+        .limit(month === "all" ? 1000 : 2000);
       if (error) throw error;
       return (data ?? []) as Invoice[];
     },
@@ -210,12 +223,12 @@ function PurchasesPage() {
   }, [invoices, search]);
 
   const totals = useMemo(() => {
-    const t = invoices.reduce(
+    const t = filtered.reduce(
       (a, i) => ({ total: a.total + Number(i.total), paid: a.paid + Number(i.paid), due: a.due + Number(i.due) }),
       { total: 0, paid: 0, due: 0 }
     );
     return t;
-  }, [invoices]);
+  }, [filtered]);
 
   const supplierDues = useMemo(() =>
     suppliers.filter(s => Number(s.balance_due) > 0).sort((a, b) => Number(b.balance_due) - Number(a.balance_due)),
@@ -252,7 +265,7 @@ function PurchasesPage() {
         <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Total Purchases</div><div className="text-xl sm:text-2xl font-semibold">{fmt(totals.total)}</div></CardContent></Card>
         <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Paid</div><div className="text-xl sm:text-2xl font-semibold text-emerald-600">{fmt(totals.paid)}</div></CardContent></Card>
         <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Outstanding Due</div><div className="text-xl sm:text-2xl font-semibold text-destructive">{fmt(totals.due)}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Invoices</div><div className="text-xl sm:text-2xl font-semibold">{invoices.length}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Invoices</div><div className="text-xl sm:text-2xl font-semibold">{filtered.length}</div></CardContent></Card>
       </div>
 
       <Tabs defaultValue="invoices">
@@ -265,12 +278,21 @@ function PurchasesPage() {
           <Card>
             <CardHeader className="flex-row items-center justify-between gap-3">
               <CardTitle>Purchase History</CardTitle>
-              <Input
-                placeholder="Search invoice / supplier..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="max-w-sm"
-              />
+              <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
+                <Select value={month} onValueChange={setMonth}>
+                  <SelectTrigger className="h-9 w-44" aria-label="Month"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All months</SelectItem>
+                    {monthOptions.map((m) => <SelectItem key={m} value={m}>{monthLabel(m)}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Input
+                  placeholder="Search invoice / supplier..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="h-9 w-full sm:w-64"
+                />
+              </div>
             </CardHeader>
             <CardContent>
               <Table>
@@ -289,7 +311,7 @@ function PurchasesPage() {
                 </TableHeader>
                 <TableBody>
                   {filtered.length === 0 && (
-                    <TableRow><TableCell colSpan={9} className="text-center py-10 text-muted-foreground">No purchase invoices yet</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={9} className="text-center py-10 text-muted-foreground">{month === "all" ? "No purchase invoices yet" : `No purchase invoices in ${monthLabel(month)}`}</TableCell></TableRow>
                   )}
                   {filtered.map(inv => (
                     <TableRow key={inv.id}>
@@ -1097,4 +1119,12 @@ function PurchaseLabelsDialog({ invoiceId, invoiceNo, onClose }: { invoiceId: st
       onDone={onClose}
     />
   );
+}
+
+function monthKey(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function monthLabel(k: string) {
+  const [y, m] = k.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
 }
