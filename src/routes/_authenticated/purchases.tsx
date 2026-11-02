@@ -1,7 +1,7 @@
 import { withSchemaFallback } from "@/lib/schema-fallback";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { Truck, Plus, Trash2, Eye, RotateCcw, Wallet, Printer, X, Barcode, Upload, Pencil, BookOpen } from "lucide-react";
+import { Truck, Plus, Trash2, Eye, RotateCcw, Wallet, Printer, X, Barcode, Upload, Pencil, BookOpen, Lock } from "lucide-react";
 import { SupplierLedgerDialog } from "@/components/SupplierLedgerDialog";
 import { BarcodeLabelDialog, type LabelProduct } from "@/components/BarcodeLabelDialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -150,6 +150,7 @@ function PurchasesPage() {
       items: (data ?? []).filter((r: any) => r.product_id).map((r: any) => ({
         product_id: r.product_id, quantity: Number(r.quantity), discount: Number(r.discount), line_total: Number(r.line_total),
         batch_no: r.batch_no, expiry_date: r.expiry_date, no_stock: !!r.no_stock,
+        freight_fixed: r.freight_fixed == null ? null : Number(r.freight_fixed),
       })),
     });
   };
@@ -330,16 +331,20 @@ function PurchasesPage() {
                             <Button size="icon" variant="ghost" title="Pay" onClick={() => setPayFor(inv)}><Wallet className="h-4 w-4" /></Button>
                           )}
                           {isAdmin && inv.status !== "returned" && inv.status !== "partially_returned" && (
-                            <Button size="icon" variant="ghost" title="Edit" aria-label={`Edit ${inv.invoice_no}`} onClick={() => void openEdit(inv)}><Pencil className="h-4 w-4" /></Button>
+                            enteredToday(inv)
+                              ? <Button size="icon" variant="ghost" title="Edit" aria-label={`Edit ${inv.invoice_no}`} onClick={() => void openEdit(inv)}><Pencil className="h-4 w-4" /></Button>
+                              : <span className="inline-flex h-10 w-10 items-center justify-center text-muted-foreground" title="Edit and delete only on the day it was entered — use Return" aria-label={`${inv.invoice_no} locked: entered on an earlier day`}><Lock className="h-3.5 w-3.5" /></span>
                           )}
                           <PurchaseLabelsButton invoiceId={inv.id} invoiceNo={inv.invoice_no} />
                           {inv.status !== "returned" && (
                             <Button size="icon" variant="ghost" title="Return" onClick={() => setReturnFor(inv.id)}><RotateCcw className="h-4 w-4" /></Button>
                           )}
-                          <DeleteInvoiceButton
-                            invoiceId={inv.id}
-                            onDone={() => qc.invalidateQueries({ queryKey: ["purchase_invoices"] })}
-                          />
+                          {enteredToday(inv) && (
+                            <DeleteInvoiceButton
+                              invoiceId={inv.id}
+                              onDone={() => qc.invalidateQueries({ queryKey: ["purchase_invoices"] })}
+                            />
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -1127,4 +1132,9 @@ function monthKey(d: Date) {
 function monthLabel(k: string) {
   const [y, m] = k.split("-").map(Number);
   return new Date(y, m - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+}
+
+/** Edit / delete is allowed only on the day the purchase was entered (Dhaka date). */
+function enteredToday(inv: { created_at: string }) {
+  return new Date(inv.created_at).toLocaleDateString("en-CA", { timeZone: "Asia/Dhaka" }) === todayDhaka();
 }

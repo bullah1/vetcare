@@ -23,7 +23,7 @@ import { PurchaseItemSearch, type SearchProduct } from "@/components/PurchaseIte
 import { todayDhaka } from "@/lib/sales-ledger";
 import { cn } from "@/lib/utils";
 import {
-  averageCost, chargeShares, exactUnitPrice, fmtField, invoiceTotals, landedUnitCost, lineAmounts, lineError, num, onQuantity, onTotal, onUnitPrice,
+  averageCost, chargeSharesFixed, exactUnitPrice, fmtField, invoiceTotals, landedUnitCost, lineAmounts, lineError, num, onQuantity, onTotal, onUnitPrice,
   type AmountKind, type LineInput,
 } from "@/lib/purchase-calc";
 
@@ -34,7 +34,7 @@ export type EntrySupplier = { id: string; name: string; phone: string | null; ba
 export type EditPurchase = {
   id: string; invoice_no: string; supplier_id: string | null; supplier_invoice_no: string | null; invoice_date: string;
   discount: number; vat: number; freight: number; notes: string | null; stock_only: boolean; paid: number;
-  items: { product_id: string; quantity: number; discount: number; line_total: number; batch_no: string | null; expiry_date: string | null; no_stock?: boolean }[];
+  items: { product_id: string; quantity: number; discount: number; line_total: number; batch_no: string | null; expiry_date: string | null; no_stock?: boolean; freight_fixed?: number | null }[];
 };
 
 type Row = LineInput & {
@@ -45,6 +45,8 @@ type Row = LineInput & {
   expiry_date: string;
   /** Amount only — this line does not add stock (Bulk / Mixed goods). */
   no_stock: boolean;
+  /** Courier typed for this line; "" = its share of the courier total by amount %. */
+  freight: string;
   open?: boolean;
 };
 
@@ -92,6 +94,7 @@ export function PurchaseEntryDialog({
       new_selling_price: p?.selling_price ? String(p.selling_price) : "",
       batch_no: it.batch_no ?? "", expiry_date: it.expiry_date ?? "",
       no_stock: !!it.no_stock || !!p?.no_stock,
+      freight: it.freight_fixed != null ? fmtField(Number(it.freight_fixed), 2) : "",
     };
   }));
 
@@ -115,9 +118,16 @@ export function PurchaseEntryDialog({
 
   const productById = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
 
+  // Courier typed on lines. With the courier total empty, the total is their sum.
+  const fixedList = useMemo(() => rows.map((r) => (r.freight.trim() === "" ? null : num(r.freight))), [rows]);
+  const fixedSum = fixedList.reduce<number>((s, v) => s + (v ?? 0), 0);
+  const chargesEff = charges.trim() === "" ? (fixedSum > 0 ? fmtField(fixedSum, 2) : "") : charges;
+  const courierError = fixedSum > (num(chargesEff) ?? 0) + 0.005
+    ? `Courier on the lines (${money(fixedSum)}) is more than the courier total (${money(num(chargesEff) ?? 0)}).`
+    : rows.some((r) => r.freight.trim() !== "" && num(r.freight) === null) ? "Courier on a line must be a number of 0 or more." : null;
   const totals = useMemo(
-    () => invoiceTotals(rows, { overall_disc_value: discValue, overall_disc_kind: discKind, vat_value: vatValue, vat_kind: vatKind, charges }),
-    [rows, discValue, discKind, vatValue, vatKind, charges],
+    () => invoiceTotals(rows, { overall_disc_value: discValue, overall_disc_kind: discKind, vat_value: vatValue, vat_kind: vatKind, charges: chargesEff }),
+    [rows, discValue, discKind, vatValue, vatKind, chargesEff],
   );
   const dirty = editing ? true : rows.length > 0 || !!entryProduct;
 
@@ -126,7 +136,7 @@ export function PurchaseEntryDialog({
   // When editing, the shelf stock still includes this purchase's old lines.
   const costInfo = useMemo(() => {
     const finals = rows.map((r) => lineAmounts(r).final);
-    const shares = chargeShares(finals, totals.charges);
+    const shares = chargeSharesFixed(finals, totals.charges, fixedList);
     const oldQty = new Map<string, number>();
     for (const it of editing?.items ?? []) if (!it.no_stock) oldQty.set(it.product_id, (oldQty.get(it.product_id) ?? 0) + Number(it.quantity));
     const map = new Map<string, CostInfo>();
@@ -144,7 +154,7 @@ export function PurchaseEntryDialog({
       map.set(r.key, { share: shares[i], buy: q > 0 ? finals[i] / q : 0, courierEach: q > 0 ? shares[i] / q : 0, landed, avg, jump });
     });
     return map;
-  }, [rows, totals.charges, productById, editing]);
+  }, [rows, totals.charges, productById, editing, fixedList]);
 
   // ---------- entry bar ----------
   const pickProduct = (p: SearchProduct) => {
@@ -199,7 +209,7 @@ export function PurchaseEntryDialog({
       return [...prev, {
         ...entry, key: newKey(), product_id: p.id,
         new_selling_price: p.selling_price ? String(p.selling_price) : "", batch_no: "", expiry_date: "",
-        no_stock: !!p.no_stock,
+        no_stock: !!p.no_stock, freight: "",
       }];
     }));
     flushSync(() => {
@@ -242,6 +252,7 @@ export function PurchaseEntryDialog({
         key: newKey(), product_id: l.product_id,
         new_selling_price: l.new_selling_price, batch_no: l.batch_no, expiry_date: l.expiry_date,
         no_stock: !!productById.get(l.product_id)?.no_stock,
+        freight: l.freight && num(l.freight) !== null ? l.freight : "",
       })),
     ]);
   };
@@ -258,6 +269,7 @@ export function PurchaseEntryDialog({
       if ([discValue, vatValue, charges].some((v) => v.trim() !== "" && num(v) === null)) {
         throw new Error("Discount, VAT and charges must be numbers of 0 or more");
       }
+      if (courierError) throw new Error(courierError);
 
       const items = rows.map((r) => ({
         product_id: r.product_id,
@@ -269,6 +281,8 @@ export function PurchaseEntryDialog({
         expiry_date: r.expiry_date || null,
         // Older databases ignore it (everything adds stock there).
         ...(r.no_stock ? { no_stock: true } : {}),
+        // Courier fixed for this line (needs the line-courier SQL; older databases split it by amount).
+        ...(r.freight.trim() !== "" ? { freight: num(r.freight) } : {}),
       }));
 
       if (editing) {
@@ -439,6 +453,7 @@ export function PurchaseEntryDialog({
                   <th className="w-28 py-2 text-right font-medium">Unit price</th>
                   <th className="w-28 py-2 text-right font-medium">Total</th>
                   <th className="w-36 py-2 text-right font-medium">Item discount</th>
+                  <th className="w-24 py-2 text-right font-medium" title="Courier for this product. Empty = its share of the courier total by amount.">Courier</th>
                   <th className="w-28 py-2 text-right font-medium">Final</th>
                   <th className="w-20 py-2 pr-4" />
                 </tr>
@@ -471,8 +486,12 @@ export function PurchaseEntryDialog({
             <TotalLine label="Item discount" value={totals.itemDiscount ? `− ${money(totals.itemDiscount)}` : money(0)} muted />
             <AmountLine label="Overall discount" value={discValue} kind={discKind} onValue={setDiscValue} onKind={setDiscKind} result={totals.overallDiscount ? `− ${money(totals.overallDiscount)}` : money(0)} />
             <AmountLine label="VAT / tax" value={vatValue} kind={vatKind} onValue={setVatValue} onKind={setVatKind} result={money(totals.vat)} />
-            <AmountLine label="Courier / other charges" value={charges} onValue={setCharges} result={money(totals.charges)} />
-            {totals.charges > 0 && <p className="text-right text-[11px] text-muted-foreground">Split over the products by amount % and added to their cost — see each line.</p>}
+            <AmountLine label="Courier / other charges" value={charges} onValue={setCharges} result={money(totals.charges)} placeholder={charges.trim() === "" && fixedSum > 0 ? fmtField(fixedSum, 2) : undefined} />
+            {courierError
+              ? <p className="text-right text-[11px] font-medium text-destructive">{courierError}</p>
+              : totals.charges > 0 && <p className="text-right text-[11px] text-muted-foreground">
+                  {fixedSum > 0 ? `${money(fixedSum)} set on lines · rest split by amount %` : "Split over the products by amount % and added to their cost"} — see each line.
+                </p>}
             <div className="flex items-baseline justify-between border-t pt-2">
               <span className="font-semibold">Purchase total</span>
               <span className="text-2xl font-bold tabular-nums">{money(totals.net)}</span>
@@ -592,6 +611,13 @@ function RowView({ r, i, p, a, err, cost, onChange, onRemove }: {
           </div>
           {r.disc_kind === "pct" && a.discount > 0 && <div className="pr-1 text-right text-[11px] text-muted-foreground tabular-nums">− {money(a.discount)}</div>}
         </td>
+        <td className="py-1.5">
+          <input className={cn(cellInput, "w-20", r.freight.trim() !== "" ? "font-semibold" : "placeholder:text-muted-foreground/70")} inputMode="decimal"
+            value={r.freight} aria-label="Courier for this product" onFocus={(e) => e.currentTarget.select()}
+            placeholder={cost && cost.share > 0 ? qtyFmt(cost.share) : "0"}
+            title={r.freight.trim() !== "" ? "Fixed courier for this product. Clear it to split by amount again." : "Auto share of the courier total. Type to set it for this product."}
+            onChange={(e) => onChange((x) => ({ ...x, freight: e.target.value }))} onKeyDown={blurOnEnter} />
+        </td>
         <td className="py-1.5 pr-1 text-right font-semibold tabular-nums">{money(a.final)}</td>
         <td className="py-1.5 pr-3">
           <div className="flex justify-end">
@@ -608,7 +634,7 @@ function RowView({ r, i, p, a, err, cost, onChange, onRemove }: {
       {r.open && (
         <tr className="border-b bg-muted/30">
           <td />
-          <td colSpan={8} className="py-2 pr-4">
+          <td colSpan={9} className="py-2 pr-4">
             <div className="grid max-w-2xl grid-cols-3 gap-3">
               <label className="text-xs text-muted-foreground">Batch no.
                 <Input className="mt-1 h-8" value={r.batch_no} onChange={(e) => onChange((x) => ({ ...x, batch_no: e.target.value }))} onKeyDown={blurOnEnter} />
@@ -649,14 +675,14 @@ function TotalLine({ label, value, muted, danger }: { label: string; value: stri
   );
 }
 
-function AmountLine({ label, value, kind, onValue, onKind, result }: {
-  label: string; value: string; kind?: AmountKind; onValue: (v: string) => void; onKind?: (k: AmountKind) => void; result: string;
+function AmountLine({ label, value, kind, onValue, onKind, result, placeholder }: {
+  label: string; value: string; kind?: AmountKind; onValue: (v: string) => void; onKind?: (k: AmountKind) => void; result: string; placeholder?: string;
 }) {
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,130px)_minmax(0,110px)] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,130px)_minmax(0,140px)]">
       <span className="leading-tight text-muted-foreground">{label}</span>
       <div className="flex items-center gap-1">
-        <Input className="h-8 min-w-0 text-right tabular-nums" inputMode="decimal" value={value} placeholder="0" aria-label={label}
+        <Input className="h-8 min-w-0 text-right tabular-nums" inputMode="decimal" value={value} placeholder={placeholder ?? "0"} aria-label={label}
           onChange={(e) => onValue(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !(e.ctrlKey || e.metaKey)) e.preventDefault(); }} />
         {kind && onKind && <KindToggle kind={kind} onKind={onKind} />}

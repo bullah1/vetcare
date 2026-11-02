@@ -21,9 +21,11 @@ export type ImportProduct = { id: string; name: string; sku: string | null; barc
 export type ImportedLine = {
   product_id: string; quantity: string; purchase_price: string; discount: string;
   new_selling_price: string; batch_no: string; expiry_date: string;
+  /** Courier for this line (optional "Courier" column); "" = split automatically. */
+  freight?: string;
 };
 
-const HEADERS = ["Name", "SKU", "Barcode", "Category", "Unit", "Qty", "Cost price", "Selling price", "Line discount", "Batch", "Expiry"] as const;
+const HEADERS = ["Name", "SKU", "Barcode", "Category", "Unit", "Qty", "Cost price", "Selling price", "Line discount", "Courier", "Batch", "Expiry"] as const;
 type Head = (typeof HEADERS)[number];
 const ALIASES: Record<string, Head> = {
   name: "Name", "product name": "Name", product: "Name", item: "Name", "নাম": "Name",
@@ -36,6 +38,7 @@ const ALIASES: Record<string, Head> = {
   "selling price": "Selling price", "sell price": "Selling price", mrp: "Selling price", price: "Selling price", "new sell": "Selling price", "বিক্রয়মূল্য": "Selling price",
   "line discount": "Line discount", discount: "Line discount", disc: "Line discount",
   batch: "Batch", "batch no": "Batch", lot: "Batch",
+  courier: "Courier", "courier charge": "Courier", freight: "Courier", shipping: "Courier", carrying: "Courier", "কুরিয়ার": "Courier",
   expiry: "Expiry", "expiry date": "Expiry", exp: "Expiry", "exp date": "Expiry",
 };
 const normHead = (h: string) => ALIASES[h.trim().toLowerCase().replace(/\s*\(.*?\)\s*/g, "").replace(/[_\s]+/g, " ").replace(/\s*৳\s*/g, "").trim()] ?? null;
@@ -74,14 +77,15 @@ type Line = {
   id: string; line: number;
   name: string; sku: string; barcode: string; category: string; unit: string;
   qty: string; cost: string; sell: string; disc: string; batch: string; expiry: string;
+  freight?: string;
   /** "auto" = follow SKU / barcode / name; "new" = make a new product; else a chosen product id. */
   pick: string;
 };
 
 export function downloadPurchaseTemplate() {
   const ws = XLSX.utils.json_to_sheet([
-    { Name: "Royal Canin Kitten 2kg", SKU: "RC-K2", Barcode: "", Category: "pet_food", Unit: "pcs", Qty: 10, "Cost price": 2100, "Selling price": 2450, "Line discount": 0, Batch: "B-101", Expiry: "2027-06-30" },
-    { Name: "Ivermectin 1% 10ml", SKU: "", Barcode: "", Category: "medicine", Unit: "vial", Qty: 20, "Cost price": 120, "Selling price": 180, "Line discount": 0, Batch: "", Expiry: "" },
+    { Name: "Royal Canin Kitten 2kg", SKU: "RC-K2", Barcode: "", Category: "pet_food", Unit: "pcs", Qty: 10, "Cost price": 2100, "Selling price": 2450, "Line discount": 0, Courier: "", Batch: "B-101", Expiry: "2027-06-30" },
+    { Name: "Ivermectin 1% 10ml", SKU: "", Barcode: "", Category: "medicine", Unit: "vial", Qty: 20, "Cost price": 120, "Selling price": 180, "Line discount": 0, Courier: "", Batch: "", Expiry: "" },
   ], { header: [...HEADERS] });
   ws["!cols"] = HEADERS.map((h) => ({ wch: Math.max(12, h.length + 4) }));
   const help = XLSX.utils.aoa_to_sheet([
@@ -252,7 +256,7 @@ export function PurchaseImportDialog({
           id: uid(), line: i + 2, name: str("Name"), sku: str("SKU"), barcode: str("Barcode"),
           category: toCat(str("Category")), unit: str("Unit") || q.unit || "pcs",
           qty: q.qty, cost: numStr(get("Cost price")), sell: numStr(get("Selling price")), disc: numStr(get("Line discount")),
-          batch: str("Batch"), expiry: toDate(get("Expiry")), pick: "auto",
+          freight: numStr(get("Courier")), batch: str("Batch"), expiry: toDate(get("Expiry")), pick: "auto",
         });
       });
       if (!out.length) throw new Error(skipped ? `All ${skipped} rows have 0 or minus quantity — nothing to buy` : "No rows found under the header");
@@ -293,6 +297,7 @@ export function PurchaseImportDialog({
         new_selling_price: v.l.sell,
         batch_no: v.l.batch,
         expiry_date: v.l.expiry,
+        freight: v.l.freight ?? "",
       }));
       if (out.some((o) => !o.product_id)) throw new Error("Some rows have no product — check them");
       await onApply(out, fresh.length);

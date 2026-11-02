@@ -156,3 +156,19 @@ export function averageCost(stock: number, cost: number, qty: number, unitCost: 
   if (on <= 0 || !(cost > 0) || !(qty > 0)) return unitCost;
   return (on * cost + qty * unitCost) / (on + qty);
 }
+
+/**
+ * Courier split when some lines carry their own amount (e.g. heavy litter):
+ * those lines get exactly their amount; the rest of `charges` is split over the
+ * other lines by amount %. Same as the server's purchase_lines().
+ */
+export function chargeSharesFixed(lineFinals: number[], charges: number, fixed: (number | null)[]): number[] {
+  const fixedSum = fixed.reduce<number>((s, v) => s + (v ?? 0), 0);
+  const rest = Math.max((charges || 0) - fixedSum, 0);
+  const autoSub = lineFinals.reduce((s, v, i) => s + (fixed[i] == null ? Math.max(v, 0) : 0), 0);
+  return lineFinals.map((v, i) => {
+    const f = fixed[i];
+    if (f != null) return round2(f);
+    return autoSub > 0 ? round2((rest * Math.max(v, 0)) / autoSub) : 0;
+  });
+}

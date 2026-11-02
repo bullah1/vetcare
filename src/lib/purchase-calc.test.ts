@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
-  averageCost, chargeShares, landedUnitCost,
+  averageCost, chargeShares, chargeSharesFixed, landedUnitCost,
   num, onQuantity, onUnitPrice, onTotal, exactUnitPrice, lineAmounts, invoiceTotals, lineError, type LineInput,
 } from "./purchase-calc";
 
@@ -117,4 +117,17 @@ it("landed cost and weighted average match the server", () => {
   // no cost yet → new cost
   assert.equal(averageCost(5, 0, 10, 150), 150);
 });
+});
+
+describe("chargeSharesFixed", () => {
+  it("keeps the fixed line and splits the rest by amount", () => {
+    const s = chargeSharesFixed([4000, 480, 750], 200, [150, null, null]);
+    assert.deepEqual(s, [150, 19.51, 30.49]);
+  });
+  it("no fixed lines = same as chargeShares", () => {
+    assert.deepEqual(chargeSharesFixed([480, 750], 50, [null, null]), chargeShares([480, 750], 50));
+  });
+  it("all lines fixed", () => {
+    assert.deepEqual(chargeSharesFixed([100, 200], 30, [10, 20]), [10, 20]);
+  });
 });
