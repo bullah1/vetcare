@@ -95,6 +95,8 @@ const today = todayDhaka;
 
 function toReceipt(d: SaleDetail): PrintReceipt {
   return {
+    // Sasthya Seba bills (SS-…) print with the Sasthya Seba header.
+    project: (d as { project?: string | null }).project ?? (String(d.invoice_no).startsWith("SS-") ? "ss" : "pcv"),
     invoice_no: d.invoice_no,
     subtotal: Number(d.subtotal),
     tax: Number(d.tax),

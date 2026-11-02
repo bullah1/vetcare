@@ -1,3 +1,4 @@
+import { BusinessBadge } from "@/components/BusinessBadge";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { History, Receipt, Printer, Search, Bike } from "lucide-react";
@@ -46,6 +47,8 @@ const statusColor: Record<string, string> = {
 
 function toReceipt(d: SaleDetail): PrintReceipt {
   return {
+    // Sasthya Seba bills (SS-…) print with the Sasthya Seba header.
+    project: (d as { project?: string | null }).project ?? (String(d.invoice_no).startsWith("SS-") ? "ss" : "pcv"),
     invoice_no: d.invoice_no,
     subtotal: Number(d.subtotal),
     tax: Number(d.tax),
@@ -161,7 +164,7 @@ export function SalesHistory({ trigger }: { trigger?: React.ReactNode }) {
                   {sales.map((s) => (
                     <TableRow key={s.id} className="cursor-pointer" onClick={() => setDetailId(s.id)}>
                       <TableCell>
-                        <div className="font-medium">{s.invoice_no}</div>
+                        <div className="flex items-center gap-1.5 font-medium">{s.invoice_no}<BusinessBadge biz={s.invoice_no.startsWith("SS-") ? "ss" : "pcv"} /></div>
                         <div className="text-xs text-muted-foreground">{format(new Date(s.created_at), "dd MMM yyyy, hh:mm a")}</div>
                       </TableCell>
                       <TableCell className="text-sm">
