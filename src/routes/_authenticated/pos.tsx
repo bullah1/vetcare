@@ -447,6 +447,8 @@ function POSPage() {
   const { hasRole, can } = useAuth();
   const [q, setQ] = useState("");
   const [cart, setCart] = useState<CartLine[]>([]);
+  const cartRef = useRef(cart);
+  cartRef.current = cart;
   const [qtyFocused, setQtyFocused] = useState<Record<string, boolean>>({});
   const [ownerId, setOwnerId] = useState<string>("");
   const [discount, setDiscount] = useState(0);
@@ -755,6 +757,30 @@ function POSPage() {
   const isB2b = owners.find((o) => o.id === ownerId)?.customer_type === "b2b";
   const canEditPrice = isB2b && can("price_override");
   const isB2bRef = useRef(isB2b);
+  // Out-of-stock selling switch (Settings row 'pos_out_of_stock'; no row = allowed, as before).
+  const oosQ = useQuery({
+    queryKey: ["pos-out-of-stock"],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any).from("app_settings").select("value").eq("key", "pos_out_of_stock").maybeSingle();
+      if (error) return true;
+      return data?.value?.allow !== false;
+    },
+    staleTime: 60_000,
+  });
+  const oosAllowed = oosQ.data ?? true;
+  const oosRef = useRef(oosAllowed);
+  oosRef.current = oosAllowed;
+  const [oosSaving, setOosSaving] = useState(false);
+  const toggleOos = async () => {
+    const next = !oosAllowed;
+    setOosSaving(true);
+    const { error } = await (supabase as any).from("app_settings")
+      .upsert({ key: "pos_out_of_stock", value: { allow: next }, updated_at: new Date().toISOString() }, { onConflict: "key" });
+    setOosSaving(false);
+    if (error) { toast.error(error.message); return; }
+    qc.setQueryData(["pos-out-of-stock"], next);
+    toast.success(next ? "Out-of-stock selling turned ON" : "Out-of-stock selling turned OFF — only items in stock can be billed");
+  };
   isB2bRef.current = isB2b;
   const priceFor = (p: Product, b2b: boolean) =>
     b2b && p.wholesale_price != null ? Number(p.wholesale_price) : Number(p.selling_price);
@@ -950,8 +976,17 @@ function POSPage() {
 
   // Same product again → its existing cart line grows (no duplicate lines).
   const addToCart = useCallback((p: Product, qty = 1) => {
-    warnStock(p);
     const stock = Number(p.stock_quantity);
+    if (!oosRef.current) {
+      const inCart = cartRef.current.find((l) => l.product_id === p.id)?.quantity ?? 0;
+      if (inCart + qty > stock) {
+        toast.error(stock - inCart > 0
+          ? `${p.name}: only ${Math.max(0, stock - inCart)} more in stock`
+          : `${p.name}: out of stock — out-of-stock selling is off`);
+        return;
+      }
+    }
+    warnStock(p);
     if (stock <= 0) toast.warning(`${p.name}: stock 0 — selling anyway`);
     setCart((c) => {
       const found = c.find((l) => l.product_id === p.id);
@@ -1099,7 +1134,11 @@ function POSPage() {
     setCart((c) => c.map((l) => {
       if (l.product_id !== id) return l;
       // Loose products step by half (1 → 1.5 → 2).
-      const next = round3(l.quantity + (l.loose ? delta / 2 : delta));
+      let next = round3(l.quantity + (l.loose ? delta / 2 : delta));
+      if (!oosRef.current && delta > 0 && next > l.stock_quantity) {
+        toast.error(`${l.name}: only ${Math.max(0, l.stock_quantity)} in stock`);
+        next = l.quantity;
+      }
       return { ...l, quantity: Math.max(0, next) };
     }).filter((l) => l.quantity > 0));
   }
@@ -1188,6 +1227,10 @@ function POSPage() {
       if (cart.length === 0) throw new Error("Cart is empty");
       const zeroLine = cart.find((l) => !(l.quantity > 0));
       if (zeroLine) throw new Error(`Set a quantity for ${zeroLine.name} or remove it`);
+      if (!oosAllowed) {
+        const over = cart.find((l) => l.quantity > l.stock_quantity);
+        if (over) throw new Error(`${over.name}: only ${Math.max(0, over.stock_quantity)} in stock. Out-of-stock selling is off — lower the quantity or turn it on.`);
+      }
       // Prices may have changed since POS was opened (Inventory, Purchases, another counter).
       // Re-read them; lines whose price was not typed by hand take today's price.
       // The customer may have been made B2B / retail on another screen or device.
@@ -2018,6 +2061,20 @@ function POSPage() {
             <p className="text-xs font-medium text-muted-foreground">
               {q.trim() ? `${filtered.length} match${filtered.length === 1 ? "" : "es"}` : filtered.length > 0 ? "Best sellers" : ""}
             </p>
+            <div className="flex items-center gap-2">
+            {isAdmin ? (
+              <button type="button" onClick={() => void toggleOos()} disabled={oosSaving || oosQ.isLoading}
+                aria-pressed={!oosAllowed}
+                title={oosAllowed ? "Out-of-stock items can be billed. Click to block them." : "Only items in stock can be billed. Click to allow out-of-stock."}
+                className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs font-medium transition-colors ${oosAllowed ? "bg-card text-muted-foreground hover:text-foreground" : "border-destructive/40 bg-destructive/10 text-destructive"}`}>
+                <span className={`relative inline-flex h-3.5 w-6 rounded-full transition-colors ${oosAllowed ? "bg-emerald-500" : "bg-muted-foreground/40"}`}>
+                  <span className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-all ${oosAllowed ? "left-3" : "left-0.5"}`} />
+                </span>
+                Out of stock {oosAllowed ? "on" : "off"}
+              </button>
+            ) : !oosAllowed && (
+              <span className="rounded-lg border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive">Out of stock off</span>
+            )}
             <div className="inline-flex rounded-lg border bg-card p-0.5" role="group" aria-label="Product view">
               {(["grid", "list"] as const).map((v) => (
                 <button
@@ -2032,6 +2089,7 @@ function POSPage() {
                   {v === "grid" ? "Grid" : "List"}
                 </button>
               ))}
+            </div>
             </div>
           </div>
           {filtered.length === 0 ? (
