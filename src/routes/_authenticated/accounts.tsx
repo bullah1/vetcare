@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Wallet, Plus, TrendingUp, TrendingDown, Receipt, AlertCircle, Printer, Search, CheckCircle2 } from "lucide-react";
+import { Wallet, Plus, TrendingUp, TrendingDown, Receipt, AlertCircle, Printer, Search, CheckCircle2, X, Lock } from "lucide-react";
 import { printExpenseVoucher } from "@/lib/expense-voucher";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -43,10 +43,15 @@ type Expense = {
   voucher_no?: string | null;
   /** The biller's own receipt / bill number. */
   ref_no?: string | null;
+  purchase_invoice_id?: string | null;
   /** pcv / ss, or null = shared by both businesses (column exists after the Projects SQL). */
   project?: string | null;
 };
 type ExpBusiness = "pcv" | "ss" | "shared";
+type Cancelled = {
+  id: string; voucher_no: string | null; category: string; amount: number; method: string;
+  paid_to: string | null; expense_date: string; reason: string | null; cancelled_at: string;
+};
 const expBusinessLabel = (p?: string | null) => PROJECTS.find((x) => x.key === p)?.short ?? "Shared";
 
 type Sale = {
@@ -88,6 +93,13 @@ function AccountsPage() {
   const [to, setTo] = useState(today());
   const [openExp, setOpenExp] = useState(false);
   const [openShift, setOpenShift] = useState<{ shift_id: string; expected_cash: number } | null>(null);
+  /** Last cash drawer close: expenses entered before it are locked (no cancel). */
+  const [lastClose, setLastClose] = useState<string | null>(null);
+  const [cancelled, setCancelled] = useState<Cancelled[]>([]);
+  const [showCancelled, setShowCancelled] = useState(false);
+  const [cancelFor, setCancelFor] = useState<Expense | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelling, setCancelling] = useState(false);
   // The Projects SQL adds expenses.project; the categories table comes with it.
   const { available: hasProjects } = useProductCategories();
   const [expBusiness, setExpBusiness] = useState<ExpBusiness>("shared");
@@ -132,6 +144,14 @@ function AccountsPage() {
       setPayments(p);
       setOwners(o);
       setSupplierPayments(sp);
+      const [lc, cx] = await Promise.all([
+        supabase.from("cash_shifts").select("closed_at").eq("status", "closed").order("closed_at", { ascending: false }).limit(1),
+        // Comes with the expense cancel SQL; empty before it.
+        (supabase as any).from("expense_cancellations").select("id,voucher_no,category,amount,method,paid_to,expense_date,reason,cancelled_at")
+          .gte("expense_date", from).lte("expense_date", to).order("cancelled_at", { ascending: false }),
+      ]);
+      setLastClose((lc.data?.[0] as { closed_at: string | null } | undefined)?.closed_at ?? null);
+      setCancelled(cx.error ? [] : (cx.data ?? []));
     } catch (err: any) {
       toast.error(err?.message ?? "Could not load accounts");
     }
@@ -223,6 +243,23 @@ function AccountsPage() {
     return Array.from(m.entries()).sort((a, b) => b[1] - a[1]);
   }, [shownExpenses]);
   const hasVoucher = expenses.some((e) => "voucher_no" in e);
+  const fromPurchase = (e: Expense) => !!e.purchase_invoice_id || e.category === "Purchase" || e.category === "Supplier Payment";
+  const isLocked = (e: Expense) => !!lastClose && !!e.created_at && new Date(e.created_at).getTime() <= new Date(lastClose).getTime();
+  const cancelExpense = async () => {
+    if (!cancelFor) return;
+    setCancelling(true);
+    const { data, error } = await (supabase.rpc as any)("cancel_expense", { _expense_id: cancelFor.id, _reason: cancelReason.trim() || null });
+    setCancelling(false);
+    if (error) {
+      const missing = error.code === "PGRST202" || /cancel_expense/.test(error.message ?? "");
+      return toast.error(missing ? "Run the expense cancel SQL in Supabase first." : error.message);
+    }
+    toast.success(`Expense ${data?.voucher_no ?? ""} cancelled`.replace("  ", " "));
+    setCancelFor(null);
+    setCancelReason("");
+    refreshAppData();
+    load();
+  };
 
 
   return (
@@ -463,9 +500,22 @@ function AccountsPage() {
                       <TableCell><Badge variant="secondary" className="capitalize">{e.method}</Badge></TableCell>
                       <TableCell className="text-right font-medium">{fmt(e.amount)}</TableCell>
                       <TableCell>
-                        <Button size="icon" variant="ghost" className="h-8 w-8" aria-label={`Print voucher ${e.voucher_no ?? ""}`} onClick={() => printExpenseVoucher(e)}>
-                          <Printer className="h-4 w-4" />
-                        </Button>
+                        <div className="flex items-center justify-end gap-0.5">
+                          <Button size="icon" variant="ghost" className="h-8 w-8" aria-label={`Print voucher ${e.voucher_no ?? ""}`} title="Print voucher" onClick={() => printExpenseVoucher(e)}>
+                            <Printer className="h-4 w-4" />
+                          </Button>
+                          {fromPurchase(e) ? (
+                            <span className="w-8" title="From a purchase — change it from Purchases" />
+                          ) : isLocked(e) ? (
+                            <span className="inline-flex h-8 w-8 items-center justify-center text-muted-foreground" title="Cash drawer closed — cannot be cancelled" aria-label="Locked: cash drawer closed">
+                              <Lock className="h-3.5 w-3.5" />
+                            </span>
+                          ) : (
+                            <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive hover:text-destructive" aria-label={`Cancel expense ${e.voucher_no ?? ""}`} title="Cancel expense" onClick={() => { setCancelFor(e); setCancelReason(""); }}>
+                              <X className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -478,8 +528,62 @@ function AccountsPage() {
                   )}
                 </TableBody>
               </Table>
+              {lastClose && expenses.some(isLocked) && (
+                <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Lock className="h-3.5 w-3.5" /> Expenses entered before the last cash drawer close ({new Date(lastClose).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}) are locked and cannot be cancelled.
+                </p>
+              )}
+              {cancelled.length > 0 && (
+                <div className="mt-4 rounded-lg border">
+                  <button type="button" onClick={() => setShowCancelled((v) => !v)} className="flex w-full items-center justify-between px-3 py-2 text-sm">
+                    <span>Cancelled vouchers <span className="text-muted-foreground">({cancelled.length})</span></span>
+                    <span className="text-xs text-muted-foreground">{showCancelled ? "Hide" : "Show"}</span>
+                  </button>
+                  {showCancelled && (
+                    <Table>
+                      <TableHeader><TableRow>
+                        <TableHead>Voucher</TableHead><TableHead>Date</TableHead><TableHead>Category</TableHead>
+                        <TableHead>Reason</TableHead><TableHead>Cancelled</TableHead><TableHead className="text-right">Amount</TableHead>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {cancelled.map((c) => (
+                          <TableRow key={c.id} className="text-muted-foreground">
+                            <TableCell className="font-mono text-xs line-through">{c.voucher_no ?? "—"}</TableCell>
+                            <TableCell className="whitespace-nowrap">{c.expense_date}</TableCell>
+                            <TableCell>{c.category}{c.paid_to ? ` · ${c.paid_to}` : ""}</TableCell>
+                            <TableCell>{c.reason || "—"}</TableCell>
+                            <TableCell className="whitespace-nowrap text-xs">{new Date(c.cancelled_at).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</TableCell>
+                            <TableCell className="text-right line-through">{fmt(c.amount)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
+          <Dialog open={!!cancelFor} onOpenChange={(v) => { if (!v) setCancelFor(null); }}>
+            <DialogContent>
+              <DialogHeader><DialogTitle>Cancel expense {cancelFor?.voucher_no ?? ""}</DialogTitle></DialogHeader>
+              {cancelFor && (
+                <div className="space-y-3 text-sm">
+                  <div className="rounded-lg border bg-muted/40 p-3">
+                    <div className="font-medium">{cancelFor.category} · {fmt(cancelFor.amount)} · <span className="capitalize">{cancelFor.method}</span></div>
+                    <div className="text-muted-foreground">{cancelFor.paid_to || "—"}{cancelFor.notes ? ` · ${cancelFor.notes}` : ""}</div>
+                  </div>
+                  <p className="text-muted-foreground">
+                    The expense is removed from accounts{cancelFor.method === "cash" ? <> and <b>{fmt(cancelFor.amount)}</b> goes back into the cash drawer</> : ""}. The voucher stays in the cancelled list.
+                  </p>
+                  <div><Label>Reason</Label><Input autoFocus placeholder="e.g. Wrong amount, entered twice" value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} /></div>
+                </div>
+              )}
+              <DialogFooter className="gap-2 sm:gap-2">
+                <Button variant="outline" onClick={() => setCancelFor(null)}>Keep expense</Button>
+                <Button variant="destructive" disabled={cancelling} onClick={() => void cancelExpense()}>{cancelling ? "Cancelling…" : "Cancel expense"}</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
 
         <TabsContent value="dues">
