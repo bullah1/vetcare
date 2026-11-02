@@ -88,7 +88,7 @@ export function ReturnFlow({ trigger, invoiceNo }: { trigger?: React.ReactNode; 
 
   function setQty(id: string, delta: number, max: number) {
     setQtyMap((m) => {
-      const next = Math.max(0, Math.min(max, (m[id] ?? 0) + delta));
+      const next = Math.round(Math.max(0, Math.min(max, (m[id] ?? 0) + delta)) * 1000) / 1000;
       return { ...m, [id]: next };
     });
   }
@@ -237,6 +237,8 @@ export function ReturnFlow({ trigger, invoiceNo }: { trigger?: React.ReactNode; 
                     const max = Number(it.quantity) - Number(it.returned_quantity);
                     const q = qtyMap[it.id] ?? 0;
                     const disabled = max <= 0;
+                    // Part quantities (loose sale) return by halves.
+                    const step = Number.isInteger(Number(it.quantity)) && Number.isInteger(max) ? 1 : 0.5;
                     return (
                       <div key={it.id} className="p-3 flex items-center gap-2">
                         <div className="flex-1 min-w-0">
@@ -246,9 +248,9 @@ export function ReturnFlow({ trigger, invoiceNo }: { trigger?: React.ReactNode; 
                           </p>
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
-                          <Button type="button" size="icon" variant="ghost" className="h-8 w-8" disabled={disabled || q <= 0} onClick={() => setQty(it.id, -1, max)}><Minus className="h-3 w-3" /></Button>
-                          <span className="w-6 text-center text-sm tabular-nums">{q}</span>
-                          <Button type="button" size="icon" variant="ghost" className="h-8 w-8" disabled={disabled || q >= max} onClick={() => setQty(it.id, 1, max)}><Plus className="h-3 w-3" /></Button>
+                          <Button type="button" size="icon" variant="ghost" className="h-8 w-8" disabled={disabled || q <= 0} onClick={() => setQty(it.id, -step, max)}><Minus className="h-3 w-3" /></Button>
+                          <span className="w-8 text-center text-sm tabular-nums">{q}</span>
+                          <Button type="button" size="icon" variant="ghost" className="h-8 w-8" disabled={disabled || q >= max} onClick={() => setQty(it.id, step, max)}><Plus className="h-3 w-3" /></Button>
                         </div>
                       </div>
                     );

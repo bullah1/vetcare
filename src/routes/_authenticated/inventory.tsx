@@ -117,6 +117,8 @@ type Product = {
   project?: string | null; category_id?: string | null;
   /** Bulk / Mixed: purchases record the amount only, never stock. */
   no_stock?: boolean | null;
+  /** Sold in parts at POS (0.5, 1.5 …). */
+  loose_sale?: boolean | null;
 };
 
 function ProductsTab() {
@@ -374,7 +376,7 @@ function ProductsTab() {
           <DialogTrigger asChild>
             <Button><Plus className="h-4 w-4" /> New product</Button>
           </DialogTrigger>
-          <ProductDialog key={editing?.id ?? `new-${projectFilter}`} product={editing} defaultProject={projectFilter === "all" ? "pcv" : projectFilter} hasNoStock={products.length > 0 && "no_stock" in products[0]} onDone={() => setOpen(false)} />
+          <ProductDialog key={editing?.id ?? `new-${projectFilter}`} product={editing} defaultProject={projectFilter === "all" ? "pcv" : projectFilter} hasNoStock={products.length > 0 && "no_stock" in products[0]} hasLoose={products.length > 0 && "loose_sale" in products[0]} onDone={() => setOpen(false)} />
         </Dialog>
       </div>
 
@@ -544,6 +546,7 @@ function ProductsTab() {
                         <HighlightText text={p.name} ranges={searchRanges.get(p.id)} />
                         {!p.is_active && <Badge variant="secondary" className="ml-1">Inactive</Badge>}
                         {p.no_stock && <Badge variant="outline" className="ml-1 border-amber-300 bg-amber-50 text-amber-800">Bulk</Badge>}
+                        {p.loose_sale && <Badge variant="outline" className="ml-1" title="Sold in parts at POS (0.5, 1.5 …)">Loose</Badge>}
                       </div>
                     </TableCell>
                     <TableCell>
@@ -736,8 +739,9 @@ function QuickAdjustDialog({ product, onOpenChange }: { product: Product | null;
   );
 }
 
-function ProductDialog({ product, defaultProject = "pcv", hasNoStock = false, onDone }: { product: Product | null; defaultProject?: Project; hasNoStock?: boolean; onDone: () => void }) {
+function ProductDialog({ product, defaultProject = "pcv", hasNoStock = false, hasLoose = false, onDone }: { product: Product | null; defaultProject?: Project; hasNoStock?: boolean; hasLoose?: boolean; onDone: () => void }) {
   const [noStock, setNoStock] = useState<boolean>(!!product?.no_stock);
+  const [looseSale, setLooseSale] = useState<boolean>(!!product?.loose_sale);
   // Mini pack cost helper: what the bulk goods cost ÷ how many packs.
   const [packCost, setPackCost] = useState("");
   const [packCount, setPackCount] = useState("");
@@ -809,6 +813,7 @@ function ProductDialog({ product, defaultProject = "pcv", hasNoStock = false, on
         dose_unit: form.is_prescribable && form.dose_unit.trim() ? form.dose_unit.trim() : null,
       };
       if (hasNoStock) payload.no_stock = noStock;
+      if (hasLoose) payload.loose_sale = looseSale;
       if (hasCats) {
         // Category is optional; when set it must be of the same business (the server keeps them in step).
         payload.project = business;
@@ -983,6 +988,15 @@ function ProductDialog({ product, defaultProject = "pcv", hasNoStock = false, on
             )}
           </div>
         </div>
+        {hasLoose && !noStock && (
+          <label className="flex items-start gap-2 rounded-md border p-3 text-sm sm:col-span-2">
+            <input type="checkbox" className="mt-0.5 h-4 w-4 accent-primary" checked={looseSale} onChange={(e) => setLooseSale(e.target.checked)} />
+            <span>
+              <span className="font-medium">Sell loose — part quantity at POS</span>
+              <span className="block text-xs text-muted-foreground">Bill 0.5, 1.5, 0.25 … of this product (e.g. 1 kg food sold by half kg). Stock goes down by the same part. Price stays per unit.</span>
+            </span>
+          </label>
+        )}
         {hasNoStock && (
           <label className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50/50 p-3 text-sm sm:col-span-2 dark:bg-amber-950/10">
             <input type="checkbox" className="mt-0.5 h-4 w-4 accent-primary" checked={noStock} onChange={(e) => setNoStock(e.target.checked)} />

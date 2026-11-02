@@ -341,8 +341,12 @@ type Product = {
   /** pcv = Pet Care Vet, ss = Sasthya Seba (missing on an older database = pcv). */
   project?: string | null;
   no_stock?: boolean | null;
+  /** Can be sold in parts (0.5, 1.5 …) — set per product in Inventory. */
+  loose_sale?: boolean | null;
 };
 type CartLine = {
+  /** Part quantities allowed (loose sale product). */
+  loose?: boolean;
   product_id: string; name: string; unit_price: number; quantity: number; discount: number; tax_percent: number;
   stock_quantity: number; low_stock_threshold: number | null; nearest_expiry: string | null;
   /** Default price for this customer when added (retail or wholesale). */
@@ -398,12 +402,16 @@ async function loadPosProducts(): Promise<Product[]> {
   // The project column comes with the Projects SQL; before it everything is Pet Care Vet.
   // Bulk / Mixed products (no_stock) are made into mini packs, never sold here.
   const all = await withSchemaFallback(
-    "products.no_stock",
-    () => loadPosProductsWith(",project,no_stock"),
+    "products.loose_sale",
+    () => loadPosProductsWith(",project,no_stock,loose_sale"),
     () => withSchemaFallback(
-      "products.project",
-      () => loadPosProductsWith(",project"),
-      () => loadPosProductsWith(""),
+      "products.no_stock",
+      () => loadPosProductsWith(",project,no_stock"),
+      () => withSchemaFallback(
+        "products.project",
+        () => loadPosProductsWith(",project"),
+        () => loadPosProductsWith(""),
+      ),
     ),
   );
   return all.filter((p) => !p.no_stock);
@@ -430,6 +438,9 @@ async function loadPosProductsByIds(ids: string[]): Promise<Product[]> {
     () => loadPosProductsWith("", ids),
   );
 }
+
+/** Quantity rounded to 3 decimals (0.1 + 0.2 = 0.3, not 0.30000000000000004). */
+const round3 = (n: number) => Math.round((Number(n) || 0) * 1000) / 1000;
 
 function POSPage() {
   const qc = useQueryClient();
@@ -637,6 +648,7 @@ function POSPage() {
         low_stock_threshold: p?.low_stock_threshold ?? null,
         nearest_expiry: null,
         min_price: p?.min_selling_price ?? null,
+        loose: !!p?.loose_sale,
         // A held price that is not today's price is kept only for users allowed to change prices;
         // for others it is updated to today's price before saving.
         price_edited: p ? can("price_override") && Math.abs(Number(it.unit_price) - Number(p.selling_price)) > 0.004 : false,
@@ -950,7 +962,7 @@ function POSPage() {
       return [...c, {
         product_id: p.id, name: p.name, unit_price: price, list_price: price, min_price: p.min_selling_price ?? null,
         quantity: qty, discount: 0, tax_percent: Number(p.tax_percent),
-        stock_quantity: stock,
+        stock_quantity: stock, loose: !!p.loose_sale,
         low_stock_threshold: p.low_stock_threshold,
         nearest_expiry: expiryRef.current[p.id] ?? null,
       }];
@@ -994,8 +1006,8 @@ function POSPage() {
 
   const confirmQty = () => {
     if (!qtyFor) return;
-    const n = Math.min(99999, Math.floor(Number(qtyText)));
-    if (!(n > 0)) { toast.error("Enter a quantity of 1 or more"); return; }
+    const n = Math.min(99999, qtyFor.loose_sale ? round3(Number(qtyText)) : Math.floor(Number(qtyText)));
+    if (!(n > 0)) { toast.error(qtyFor.loose_sale ? "Enter a quantity above 0 (e.g. 0.5)" : "Enter a quantity of 1 or more"); return; }
     addToCart(qtyFor, n);
     setQtyFor(null);
     setQ("");
@@ -1086,12 +1098,22 @@ function POSPage() {
   function updateQty(id: string, delta: number) {
     setCart((c) => c.map((l) => {
       if (l.product_id !== id) return l;
-      const next = l.quantity + delta;
+      // Loose products step by half (1 → 1.5 → 2).
+      const next = round3(l.quantity + (l.loose ? delta / 2 : delta));
       return { ...l, quantity: Math.max(0, next) };
     }).filter((l) => l.quantity > 0));
   }
 
-  function setQty(id: string, raw: string) {
+  // Text being typed in a loose line's box ("0." while typing 0.5).
+  const [qtyDraft, setQtyDraft] = useState<Record<string, string>>({});
+  function setQty(id: string, raw: string, loose = false) {
+    if (loose) {
+      const t = raw.replace(",", ".").replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1");
+      setQtyDraft((d) => ({ ...d, [id]: t }));
+      const v = t === "" || t === "." ? 0 : Math.min(99999, round3(Number(t)));
+      setCart((c) => c.map((l) => (l.product_id === id ? { ...l, quantity: v } : l)));
+      return;
+    }
     const digits = raw.replace(/[^0-9]/g, "");
     const value = digits === "" ? 0 : Math.min(99999, parseInt(digits, 10));
     // Keep the line while the box is being edited: clearing the field to type a
@@ -1604,13 +1626,16 @@ function POSPage() {
                     </Button>
                     <Input
                       type="text"
-                      inputMode="numeric"
+                      inputMode={l.loose ? "decimal" : "numeric"}
                       aria-label={`Quantity of ${l.name.trim()}`}
-                      value={l.quantity === 0 && (qtyFocused[l.product_id] ?? false) ? "" : String(l.quantity)}
-                      onFocus={(e) => { setQtyFocused((f) => ({ ...f, [l.product_id]: true })); e.currentTarget.select(); }}
-                      onBlur={() => { setQtyFocused((f) => ({ ...f, [l.product_id]: false })); dropEmptyLine(l.product_id); }}
-                      onChange={(e) => setQty(l.product_id, e.target.value)}
-                      className="h-7 w-10 rounded-none border-0 bg-transparent p-0 text-center text-sm font-semibold tabular-nums shadow-none focus-visible:ring-0"
+                      title={l.loose ? "Loose sale — part quantity allowed (e.g. 0.5)" : undefined}
+                      value={l.loose && (qtyFocused[l.product_id] ?? false) && qtyDraft[l.product_id] !== undefined
+                        ? qtyDraft[l.product_id]
+                        : l.quantity === 0 && (qtyFocused[l.product_id] ?? false) ? "" : String(l.quantity)}
+                      onFocus={(e) => { setQtyFocused((f) => ({ ...f, [l.product_id]: true })); setQtyDraft((d) => ({ ...d, [l.product_id]: String(l.quantity) })); e.currentTarget.select(); }}
+                      onBlur={() => { setQtyFocused((f) => ({ ...f, [l.product_id]: false })); setQtyDraft((d) => { const { [l.product_id]: _, ...rest } = d; return rest; }); dropEmptyLine(l.product_id); }}
+                      onChange={(e) => setQty(l.product_id, e.target.value, !!l.loose)}
+                      className="h-7 w-12 rounded-none border-0 bg-transparent p-0 text-center text-sm font-semibold tabular-nums shadow-none focus-visible:ring-0"
                     />
                     <Button size="icon" variant="ghost" className="h-7 w-7 rounded-l-none" onClick={() => updateQty(l.product_id, 1)} aria-label="More">
                       <Plus className="h-3 w-3" />
@@ -2340,7 +2365,9 @@ function POSPage() {
         >
           {qtyFor && (() => {
             const inCart = cart.find((l) => l.product_id === qtyFor.id)?.quantity ?? 0;
-            const n = Math.max(0, Math.floor(Number(qtyText) || 0));
+            const loose = !!qtyFor.loose_sale;
+            const n = Math.max(0, loose ? round3(Number(qtyText) || 0) : Math.floor(Number(qtyText) || 0));
+            const step = loose ? 0.5 : 1;
             return (
               <>
                 <DialogHeader>
@@ -2351,26 +2378,39 @@ function POSPage() {
                   {inCart > 0 ? ` · ${inCart} already in cart` : ""}
                 </p>
                 <div className="flex items-center justify-center gap-2 py-2">
-                  <Button type="button" variant="outline" size="icon" className="h-12 w-12" aria-label="Less" onClick={() => setQtyText(String(Math.max(1, n - 1)))}>
+                  <Button type="button" variant="outline" size="icon" className="h-12 w-12" aria-label="Less" onClick={() => setQtyText(String(Math.max(step, round3(n - step))))}>
                     <Minus className="h-4 w-4" />
                   </Button>
                   <Input
                     id="pos-qty"
                     ref={qtyRef}
                     aria-label="Quantity"
-                    inputMode="numeric"
+                    inputMode={loose ? "decimal" : "numeric"}
                     value={qtyText}
                     onFocus={(e) => e.currentTarget.select()}
-                    onChange={(e) => setQtyText(e.target.value.replace(/[^0-9]/g, ""))}
+                    onChange={(e) => setQtyText(loose
+                      ? e.target.value.replace(",", ".").replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1")
+                      : e.target.value.replace(/[^0-9]/g, ""))}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") { e.preventDefault(); confirmQty(); }
                     }}
                     className="h-12 w-24 text-center text-2xl font-bold tabular-nums"
                   />
-                  <Button type="button" variant="outline" size="icon" className="h-12 w-12" aria-label="More" onClick={() => setQtyText(String(n + 1))}>
+                  <Button type="button" variant="outline" size="icon" className="h-12 w-12" aria-label="More" onClick={() => setQtyText(String(round3(n + step)))}>
                     <Plus className="h-4 w-4" />
                   </Button>
                 </div>
+                {loose && (
+                  <div className="-mt-1 flex flex-wrap justify-center gap-1.5" aria-label="Quick quantity">
+                    {[["¼", 0.25], ["½", 0.5], ["1", 1], ["1½", 1.5], ["2", 2]].map(([label, v]) => (
+                      <button key={String(v)} type="button" onClick={() => setQtyText(String(v))}
+                        className={`rounded-full border px-3 py-1 text-sm tabular-nums ${n === v ? "border-primary bg-primary/10 text-primary" : "hover:bg-muted"}`}>
+                        {label}
+                      </button>
+                    ))}
+                    <span className="w-full text-center text-[11px] text-muted-foreground">Loose sale — type any part, e.g. 0.75{qtyFor.unit ? ` ${qtyFor.unit}` : ""}</span>
+                  </div>
+                )}
                 {n > 0 && (
                   <p className="text-center text-sm text-muted-foreground">
                     Line total <span className="font-semibold text-foreground tabular-nums">৳ {(n * Number(qtyFor.selling_price)).toFixed(2)}</span>
