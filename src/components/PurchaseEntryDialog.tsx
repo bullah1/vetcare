@@ -49,7 +49,8 @@ type Row = LineInput & {
 };
 
 /** Cost preview of a line: its courier share, landed unit cost and the new average. */
-type CostInfo = { share: number; landed: number; avg: number | null; jump: number | null };
+/** Per line: share = courier for the whole line; buy / courierEach / landed are per unit. */
+type CostInfo = { share: number; buy: number; courierEach: number; landed: number; avg: number | null; jump: number | null };
 
 const money = (n: number) => `৳${Number(n || 0).toLocaleString("en-BD", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const qtyFmt = (n: number) => Number(n || 0).toLocaleString("en-BD", { maximumFractionDigits: 2 });
@@ -140,7 +141,7 @@ export function PurchaseEntryDialog({
       }
       const last = Number(p?.purchase_price) || 0;
       const jump = last > 0 && landed > 0 ? ((landed - last) / last) * 100 : null;
-      map.set(r.key, { share: shares[i], landed, avg, jump });
+      map.set(r.key, { share: shares[i], buy: q > 0 ? finals[i] / q : 0, courierEach: q > 0 ? shares[i] / q : 0, landed, avg, jump });
     });
     return map;
   }, [rows, totals.charges, productById, editing]);
@@ -471,7 +472,7 @@ export function PurchaseEntryDialog({
             <AmountLine label="Overall discount" value={discValue} kind={discKind} onValue={setDiscValue} onKind={setDiscKind} result={totals.overallDiscount ? `− ${money(totals.overallDiscount)}` : money(0)} />
             <AmountLine label="VAT / tax" value={vatValue} kind={vatKind} onValue={setVatValue} onKind={setVatKind} result={money(totals.vat)} />
             <AmountLine label="Courier / other charges" value={charges} onValue={setCharges} result={money(totals.charges)} />
-            {totals.charges > 0 && <p className="text-right text-[11px] text-muted-foreground">Split over the products by amount % and added to their cost.</p>}
+            {totals.charges > 0 && <p className="text-right text-[11px] text-muted-foreground">Split over the products by amount % and added to their cost — see each line.</p>}
             <div className="flex items-baseline justify-between border-t pt-2">
               <span className="font-semibold">Purchase total</span>
               <span className="text-2xl font-bold tabular-nums">{money(totals.net)}</span>
@@ -517,6 +518,36 @@ function Kbd({ children }: { children: ReactNode }) {
 const cellInput =
   "h-8 w-full rounded-md border border-transparent bg-transparent px-2 text-right tabular-nums outline-none hover:border-input focus:border-primary focus:bg-background focus:ring-2 focus:ring-primary/20";
 
+/** "Buy ৳45 + courier ৳4 = ৳49 per unit · Cost ৳50 → ৳49.40" */
+function CostLine({ cost, p, noStock }: { cost: CostInfo; p?: EntryProduct; noStock: boolean }) {
+  const old = Number(p?.purchase_price) || 0;
+  const next = noStock ? null : cost.avg ?? cost.landed;
+  const averaged = !noStock && Number(p?.stock_quantity) > 0 && old > 0;
+  const diff = next != null && old > 0 ? next - old : 0;
+  return (
+    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] tabular-nums text-muted-foreground">
+      <span>
+        {cost.courierEach > 0.004
+          ? <>Buy ৳{qtyFmt(cost.buy)} + courier ৳{qtyFmt(cost.courierEach)} = <b className="text-foreground">৳{qtyFmt(cost.landed)}</b> /unit</>
+          : <>Cost <b className="text-foreground">৳{qtyFmt(cost.landed)}</b> /unit</>}
+      </span>
+      {noStock ? (
+        <span className="text-amber-700">· amount only, product cost not changed</span>
+      ) : old > 0 && next != null ? (
+        <span className={cn("rounded px-1.5 py-px font-medium", Math.abs(diff) < 0.005 ? "bg-muted" : diff > 0 ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700")}
+          title={averaged ? "Weighted average of the stock on hand and this purchase" : "No stock on hand — the new cost is this purchase's cost"}>
+          Cost ৳{qtyFmt(old)} → ৳{qtyFmt(next)}{averaged ? " avg" : ""}
+        </span>
+      ) : (
+        <span>· first cost</span>
+      )}
+      {cost.jump != null && Math.abs(cost.jump) > 20 && (
+        <span className="font-medium text-amber-700">{cost.jump > 0 ? "▲" : "▼"} {Math.abs(cost.jump).toFixed(0)}% vs last cost</span>
+      )}
+    </div>
+  );
+}
+
 function RowView({ r, i, p, a, err, cost, onChange, onRemove }: {
   r: Row; i: number; p?: EntryProduct; a: { gross: number; discount: number; final: number }; err: string | null; cost?: CostInfo;
   onChange: (fn: (r: Row) => Row) => void; onRemove: () => void;
@@ -542,17 +573,9 @@ function RowView({ r, i, p, a, err, cost, onChange, onRemove }: {
           </div>
           <div className="truncate text-xs text-muted-foreground">
             {[p?.sku && `SKU ${p.sku}`, r.batch_no && `Batch ${r.batch_no}`, r.expiry_date && `Exp ${r.expiry_date}`].filter(Boolean).join("   ")}
-            {cost && cost.landed > 0 && (
-              <span className={cn(p?.sku || r.batch_no || r.expiry_date ? "ml-3" : "")}>
-                Cost ৳{qtyFmt(cost.landed)}{cost.share > 0 ? ` (incl. courier ৳${qtyFmt(cost.share)})` : ""}
-                {cost.avg != null && Number(p?.stock_quantity) > 0 && Math.abs(cost.avg - cost.landed) > 0.005 && <> · new average ৳{qtyFmt(cost.avg)}</>}
-                {cost.jump != null && Math.abs(cost.jump) > 20 && (
-                  <span className="ml-2 font-medium text-amber-700">{cost.jump > 0 ? "▲" : "▼"} {Math.abs(cost.jump).toFixed(0)}% vs last cost ৳{qtyFmt(Number(p?.purchase_price))}</span>
-                )}
-              </span>
-            )}
             {err && <span className="ml-2 font-medium text-destructive">{err}</span>}
           </div>
+          {cost && cost.landed > 0 && <CostLine cost={cost} p={p} noStock={r.no_stock} />}
         </td>
         <td className="py-1.5 text-xs text-muted-foreground">{p?.unit || "—"}</td>
         <td className="py-1.5"><input className={cellInput} inputMode="decimal" value={r.quantity} aria-label="Quantity" onFocus={(e) => e.currentTarget.select()}
