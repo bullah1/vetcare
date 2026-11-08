@@ -1,9 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Users, Search, Cake, MessageCircle } from "lucide-react";
+import { Users, Search, Cake, MessageCircle, Send } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -20,12 +22,26 @@ export const Route = createFileRoute("/_authenticated/crm")({
 
 const fmt = (n: number) => `৳${Number(n || 0).toLocaleString("en-BD", { maximumFractionDigits: 2 })}`;
 
+/** Bangladesh mobile → 8801XXXXXXXXX for wa.me links, or null when it is not a valid number. */
+function waNumber(raw: string | null | undefined): string | null {
+  let d = String(raw ?? "").replace(/\D/g, "");
+  if (d.startsWith("00")) d = d.slice(2);
+  if (d.length === 11 && d.startsWith("01")) d = `88${d}`;
+  if (d.length === 10 && d.startsWith("1")) d = `880${d}`;
+  return /^8801[3-9]\d{8}$/.test(d) ? d : null;
+}
+
+const LAPSED_DAYS = 30;
+const DEFAULT_MSG =
+  "আসসালামু আলাইকুম {name}, {shop} থেকে বলছি। অনেকদিন আপনাকে দেখিনি। আপনি ও আপনার পোষা প্রাণীর খবর নিতে আবার আসুন, আমরা অপেক্ষায় আছি।";
+
 function CrmPage() {
   const [owners, setOwners] = useState<any[]>([]);
   const [sales, setSales] = useState<any[]>([]);
   const [vacc, setVacc] = useState<any[]>([]);
   const [pets, setPets] = useState<any[]>([]);
   const [q, setQ] = useState("");
+  const [msgTpl, setMsgTpl] = useState(DEFAULT_MSG);
 
   useEffect(() => {
     (async () => {
@@ -69,6 +85,19 @@ function CrmPage() {
     }).filter(o => !q || o.full_name.toLowerCase().includes(q.toLowerCase()) || (o.phone || "").includes(q));
   }, [owners, sales, pets, q]);
 
+  // Customers who bought before, but not in the last LAPSED_DAYS (Dhaka calendar days).
+  const lapsed = useMemo(() => {
+    const today = todayDhaka();
+    const daysSince = (iso: string) => {
+      const d = new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Dhaka" });
+      return Math.round((Date.parse(today) - Date.parse(d)) / 86400000);
+    };
+    return enriched
+      .filter(o => o.last && daysSince(o.last) >= LAPSED_DAYS)
+      .map(o => ({ ...o, daysAgo: daysSince(o.last) }))
+      .sort((a, b) => b.daysAgo - a.daysAgo);
+  }, [enriched]);
+
   const upcomingVacc = useMemo(() => {
     const today = todayDhaka();
     const next30 = shiftDay(today, 30);
@@ -102,6 +131,7 @@ function CrmPage() {
       <Tabs defaultValue="customers">
         <TabsList>
           <TabsTrigger value="customers">Customers</TabsTrigger>
+          <TabsTrigger value="lapsed">Not visited {LAPSED_DAYS}+ days ({lapsed.length})</TabsTrigger>
           <TabsTrigger value="vaccine">Vaccination Reminders</TabsTrigger>
           <TabsTrigger value="birthdays">Birthdays This Month</TabsTrigger>
         </TabsList>
@@ -137,6 +167,60 @@ function CrmPage() {
                     </TableRow>
                   ))}
                   {enriched.length === 0 && <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">No customers</TableCell></TableRow>}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="lapsed">
+          <Card>
+            <CardHeader className="gap-3">
+              <CardTitle>Not visited {LAPSED_DAYS}+ days</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Pick the customer, press WhatsApp: the chat opens with this message. Press Send in WhatsApp.
+                Use <code>{"{name}"}</code> for the customer name and <code>{"{shop}"}</code> for the business name.
+              </p>
+              <Textarea rows={3} value={msgTpl} onChange={e => setMsgTpl(e.target.value)} />
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader><TableRow>
+                  <TableHead>Name</TableHead><TableHead>Phone</TableHead>
+                  <TableHead>Last Visit</TableHead><TableHead>Days ago</TableHead>
+                  <TableHead>Visits</TableHead>
+                  <TableHead className="text-right">WhatsApp</TableHead>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {lapsed.length === 0 && <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">No customer has been away {LAPSED_DAYS}+ days</TableCell></TableRow>}
+                  {lapsed.map(o => {
+                    const num = waNumber(o.phone);
+                    const shop = o.business === "ss" ? "Sasthya Seba" : "Pet Care Vet";
+                    const text = msgTpl.replaceAll("{name}", o.full_name).replaceAll("{shop}", shop);
+                    return (
+                      <TableRow key={o.id}>
+                        <TableCell className="font-medium">{o.full_name}</TableCell>
+                        <TableCell>
+                          {o.phone || "—"}
+                          {o.phone && !num && <div className="text-xs text-destructive">Invalid number</div>}
+                        </TableCell>
+                        <TableCell>{new Date(o.last).toLocaleDateString()}</TableCell>
+                        <TableCell>{o.daysAgo}</TableCell>
+                        <TableCell>{o.visits}</TableCell>
+                        <TableCell className="text-right">
+                          {num ? (
+                            <Button asChild size="sm" variant="outline">
+                              <a href={`https://wa.me/${num}?text=${encodeURIComponent(text)}`} target="_blank" rel="noopener noreferrer">
+                                <Send className="h-4 w-4 mr-1" /> WhatsApp
+                              </a>
+                            </Button>
+                          ) : (
+                            <Button size="sm" variant="outline" disabled>No number</Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </CardContent>
