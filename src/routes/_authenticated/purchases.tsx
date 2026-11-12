@@ -129,6 +129,7 @@ type Invoice = {
   id: string; invoice_no: string; supplier_invoice_no: string | null; supplier_id: string | null;
   invoice_date: string; subtotal: number; discount: number; vat: number; freight: number;
   total: number; paid: number; due: number; status: string; credit_applied?: number | null; stock_only?: boolean | null; notes: string | null; created_at: string;
+  pending_receipt?: boolean | null; received_at?: string | null; received_by_name?: string | null;
   suppliers?: { name: string } | null;
 };
 
@@ -146,7 +147,7 @@ function PurchasesPage() {
     setEditPurchase({
       id: inv.id, invoice_no: inv.invoice_no, supplier_id: inv.supplier_id, supplier_invoice_no: inv.supplier_invoice_no,
       invoice_date: inv.invoice_date, discount: Number(inv.discount), vat: Number(inv.vat), freight: Number(inv.freight),
-      notes: inv.notes, stock_only: !!inv.stock_only, paid: Number(inv.paid),
+      notes: inv.notes, stock_only: !!inv.stock_only, paid: Number(inv.paid), pending_receipt: !!inv.pending_receipt,
       items: (data ?? []).filter((r: any) => r.product_id).map((r: any) => ({
         product_id: r.product_id, quantity: Number(r.quantity), discount: Number(r.discount), line_total: Number(r.line_total),
         batch_no: r.batch_no, expiry_date: r.expiry_date, no_stock: !!r.no_stock,
@@ -158,6 +159,7 @@ function PurchasesPage() {
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const [viewId, setViewId] = useState<string | null>(null);
   const [returnFor, setReturnFor] = useState<string | null>(null);
+  const [receiveFor, setReceiveFor] = useState<Invoice | null>(null);
   const [payFor, setPayFor] = useState<Invoice | null>(null);
   const [labelFor, setLabelFor] = useState<{ id: string; invoice_no: string } | null>(null);
   const [search, setSearch] = useState("");
@@ -323,23 +325,33 @@ function PurchasesPage() {
                       <TableCell className="text-right">{fmt(Number(inv.total))}</TableCell>
                       <TableCell className="text-right text-emerald-600">{fmt(Number(inv.paid))}</TableCell>
                       <TableCell className={`text-right ${Number(inv.due) > 0 ? "text-destructive font-medium" : ""}`}>{fmt(Number(inv.due))}</TableCell>
-                      <TableCell><StatusBadge status={inv.status} /></TableCell>
+                      <TableCell>
+                        <StatusBadge status={inv.status} />
+                        {inv.pending_receipt ? (
+                          <div className="mt-1"><Badge className="bg-yellow-100 text-yellow-800 hover:bg-yellow-100">Not received</Badge></div>
+                        ) : inv.received_by_name ? (
+                          <div className="mt-1 text-xs text-muted-foreground">Received by {inv.received_by_name}{inv.received_at ? `, ${new Date(inv.received_at).toLocaleDateString("en-GB", { timeZone: "Asia/Dhaka" })}` : ""}</div>
+                        ) : null}
+                      </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <Button size="icon" variant="ghost" title="View" onClick={() => setViewId(inv.id)}><Eye className="h-4 w-4" /></Button>
+                          {inv.pending_receipt && (
+                            <Button size="sm" variant="outline" onClick={() => setReceiveFor(inv)}>Stock received</Button>
+                          )}
                           {Number(inv.due) > 0 && (
                             <Button size="icon" variant="ghost" title="Pay" onClick={() => setPayFor(inv)}><Wallet className="h-4 w-4" /></Button>
                           )}
                           {isAdmin && inv.status !== "returned" && inv.status !== "partially_returned" && (
-                            enteredToday(inv)
+                            (inv.pending_receipt || enteredToday(inv))
                               ? <Button size="icon" variant="ghost" title="Edit" aria-label={`Edit ${inv.invoice_no}`} onClick={() => void openEdit(inv)}><Pencil className="h-4 w-4" /></Button>
                               : <span className="inline-flex h-10 w-10 items-center justify-center text-muted-foreground" title="Edit and delete only on the day it was entered — use Return" aria-label={`${inv.invoice_no} locked: entered on an earlier day`}><Lock className="h-3.5 w-3.5" /></span>
                           )}
                           <PurchaseLabelsButton invoiceId={inv.id} invoiceNo={inv.invoice_no} />
-                          {inv.status !== "returned" && (
+                          {inv.status !== "returned" && !inv.pending_receipt && (
                             <Button size="icon" variant="ghost" title="Return" onClick={() => setReturnFor(inv.id)}><RotateCcw className="h-4 w-4" /></Button>
                           )}
-                          {enteredToday(inv) && (
+                          {(inv.pending_receipt || enteredToday(inv)) && (
                             <DeleteInvoiceButton
                               invoiceId={inv.id}
                               onDone={() => qc.invalidateQueries({ queryKey: ["purchase_invoices"] })}
@@ -455,6 +467,17 @@ function PurchasesPage() {
       )}
 
       {viewId && <ViewInvoiceDialog invoiceId={viewId} onClose={() => setViewId(null)} />}
+      {receiveFor && (
+        <ReceiveDialog
+          invoice={receiveFor}
+          onClose={() => setReceiveFor(null)}
+          onDone={() => {
+            qc.invalidateQueries({ queryKey: ["purchase_invoices"] });
+            qc.invalidateQueries({ queryKey: ["products"] });
+            qc.invalidateQueries({ queryKey: ["pos-products"] });
+          }}
+        />
+      )}
       {returnFor && (
         <ReturnDialog
           invoiceId={returnFor}
@@ -715,6 +738,50 @@ function Info({ label, value }: { label: string; value: any }) {
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="text-sm">{value}</div>
     </div>
+  );
+}
+
+/* ---------------- Stock received ---------------- */
+/** Goods arrived: adds the stock of a pending purchase and records who received it. */
+function ReceiveDialog({ invoice, onClose, onDone }: { invoice: Invoice; onClose: () => void; onDone: () => void }) {
+  const [name, setName] = useState("");
+  const receive = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.rpc("receive_purchase_invoice" as any, {
+        _invoice_id: invoice.id,
+        _received_by_name: name.trim(),
+      });
+      if (error) throw error;
+      return data as any;
+    },
+    onSuccess: () => {
+      toast.success(`${invoice.invoice_no}: stock added, received by ${name.trim()}`);
+      onDone();
+      onClose();
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Could not mark as received"),
+  });
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o && !receive.isPending) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Stock received — {invoice.invoice_no}</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Pressing Receive adds all products of this purchase to stock now. This cannot be undone here; use Return to take stock back.
+          </p>
+          <div className="space-y-1">
+            <Label htmlFor="received-by">Received by (name)</Label>
+            <Input id="received-by" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Rahim" autoFocus />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={receive.isPending}>Cancel</Button>
+          <Button onClick={() => receive.mutate()} disabled={receive.isPending || !name.trim()}>
+            {receive.isPending ? "Saving..." : "Receive stock"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

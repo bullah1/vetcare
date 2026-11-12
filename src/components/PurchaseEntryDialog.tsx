@@ -6,7 +6,7 @@
 // stock and batches in one database transaction. Purchases are stock only:
 // no payment or supplier due is recorded (accounts are kept separately).
 import { BusinessBadge } from "@/components/BusinessBadge";
-import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -34,6 +34,7 @@ export type EntrySupplier = { id: string; name: string; phone: string | null; ba
 export type EditPurchase = {
   id: string; invoice_no: string; supplier_id: string | null; supplier_invoice_no: string | null; invoice_date: string;
   discount: number; vat: number; freight: number; notes: string | null; stock_only: boolean; paid: number;
+  pending_receipt?: boolean | null;
   items: { product_id: string; quantity: number; discount: number; line_total: number; batch_no: string | null; expiry_date: string | null; no_stock?: boolean; freight_fixed?: number | null }[];
 };
 
@@ -78,10 +79,15 @@ export function PurchaseEntryDialog({
   editing?: EditPurchase | null;
 }) {
   const [uploadOpen, setUploadOpen] = useState(startWithUpload && !editing);
+  // Product not found while typing: create it here, then pick it into the line.
+  const [quickName, setQuickName] = useState<string | null>(null);
+  const [pendingPick, setPendingPick] = useState<string | null>(null);
   const [supplierId, setSupplierId] = useState(editing?.supplier_id ?? "");
   const [supplierInvoiceNo, setSupplierInvoiceNo] = useState(editing?.supplier_invoice_no ?? "");
   const [invoiceDate, setInvoiceDate] = useState(editing?.invoice_date ?? todayDhaka());
   const [notes, setNotes] = useState(editing?.notes ?? "");
+  // Goods not in yet: the purchase is recorded, but its stock is added only when "Stock received" is pressed.
+  const [notYet, setNotYet] = useState(!!editing?.pending_receipt);
   const [rows, setRows] = useState<Row[]>(() => (editing?.items ?? []).map((it) => {
     // Rebuild the line from its saved total, so the exact unit price comes back.
     const disc = Number(it.discount) || 0;
@@ -157,6 +163,12 @@ export function PurchaseEntryDialog({
   }, [rows, totals.charges, productById, editing, fixedList]);
 
   // ---------- entry bar ----------
+  useEffect(() => {
+    if (!pendingPick) return;
+    const found = productById.get(pendingPick);
+    if (found) { setPendingPick(null); pickProduct(found as unknown as SearchProduct); }
+  }, [pendingPick, productById]);
+
   const pickProduct = (p: SearchProduct) => {
     const full = productById.get(p.id);
     if (!full) return;
@@ -319,6 +331,7 @@ export function PurchaseEntryDialog({
         _notes: notes.trim() || null,
         // Goods into stock only: no payment, cash or supplier due (accounts are kept separately).
         _stock_only: true,
+        _pending: notYet,
       });
       if (error) {
         if (/create_purchase_invoice|_stock_only|PGRST202|schema cache/i.test(`${error.message} ${(error as any).code ?? ""}`)) {
@@ -396,7 +409,7 @@ export function PurchaseEntryDialog({
               className="col-span-3 md:col-span-1"
               products={products}
               onPick={pickProduct}
-              onNoMatch={(q) => toast.error(`No product for "${q}". Create it in Inventory or use Upload Excel.`)}
+              onNoMatch={(q) => setQuickName(q)}
             />
             <EntryField label="Qty" suffix={entryProduct?.unit ?? undefined} onEmptyClick={entryProduct ? undefined : pickFirst}>
               <input ref={qtyRef} inputMode="decimal" disabled={!entryProduct} value={entry.quantity}
@@ -496,10 +509,21 @@ export function PurchaseEntryDialog({
               <span className="font-semibold">Purchase total</span>
               <span className="text-2xl font-bold tabular-nums">{money(totals.net)}</span>
             </div>
+            {!editing && (
+              <label className="flex items-start gap-2 rounded-md border px-2.5 py-2 text-sm cursor-pointer">
+                <input type="checkbox" className="mt-0.5 h-4 w-4" checked={notYet} onChange={(e) => setNotYet(e.target.checked)} />
+                <span>
+                  <span className="font-medium">Goods not received yet</span>
+                  <span className="block text-xs text-muted-foreground">No stock now. Press "Stock received" on the purchase list when the goods arrive.</span>
+                </span>
+              </label>
+            )}
             <p className="rounded-md bg-muted/60 px-2.5 py-1.5 text-xs text-muted-foreground">
               {editing
                 ? <>Saving changes stock by the difference only (same invoice number).{!editing.stock_only && Number(editing.paid) > 0 ? ` Paid ${money(Number(editing.paid))} stays; the supplier due is recalculated.` : ""}</>
-                : "Stock only: products go into stock (\"No stock\" lines record the amount only). Cost = weighted average. No payment, cash or supplier due is recorded."}
+                : notYet
+                  ? "Pending: the purchase is recorded now, but products go into stock only when it is marked received."
+                  : "Stock only: products go into stock (\"No stock\" lines record the amount only). Cost = weighted average. No payment, cash or supplier due is recorded."}
             </p>
             <div className="flex gap-2 pt-1">
               <Button type="button" variant="outline" className="flex-1" onClick={() => requestClose(false)} disabled={create.isPending}>Cancel</Button>
@@ -510,6 +534,17 @@ export function PurchaseEntryDialog({
           </div>
         </div>
 
+        {quickName !== null && (
+          <QuickProductDialog
+            initialName={quickName}
+            onClose={() => setQuickName(null)}
+            onCreated={async (row) => {
+              await refreshProducts();
+              setQuickName(null);
+              setPendingPick(row.id);
+            }}
+          />
+        )}
         <PurchaseImportDialog open={uploadOpen} onOpenChange={setUploadOpen} products={products} onApply={applyUpload} />
       </DialogContent>
     </Dialog>
@@ -689,5 +724,63 @@ function AmountLine({ label, value, kind, onValue, onKind, result, placeholder }
       </div>
       <span className="text-right tabular-nums">{result}</span>
     </div>
+  );
+}
+
+/** Small form to add a product that is not in the list yet. Opening stock is 0; the purchase adds the stock. */
+function QuickProductDialog({ initialName, onClose, onCreated }: {
+  initialName: string;
+  onClose: () => void;
+  onCreated: (row: { id: string }) => Promise<void>;
+}) {
+  const [name, setName] = useState(initialName);
+  const [category, setCategory] = useState("");
+  const [unit, setUnit] = useState("pcs");
+  const [cost, setCost] = useState("");
+  const [sell, setSell] = useState("");
+  const [sku, setSku] = useState("");
+  const [barcode, setBarcode] = useState("");
+  const save = useMutation({
+    mutationFn: async () => {
+      const n = name.trim();
+      if (!n) throw new Error("Enter the product name");
+      const c = Number(cost) || 0;
+      const { data, error } = await (supabase as any).from("products").insert({
+        name: n, sku: sku.trim() || null, barcode: barcode.trim() || null,
+        category: category.trim() || null, unit: unit.trim() || "pcs",
+        purchase_price: c, selling_price: sell.trim() ? Number(sell) : c,
+        stock_quantity: 0, is_active: true,
+      }).select("id").single();
+      if (error) throw new Error(error.message);
+      return data as { id: string };
+    },
+    onSuccess: async (row) => {
+      toast.success(`${name.trim()} added`);
+      await onCreated(row);
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Could not create the product"),
+  });
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o && !save.isPending) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>New product</DialogTitle>
+        <DialogDescription>Stock is 0 now. The purchase line adds the stock.</DialogDescription>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2 space-y-1"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} autoFocus /></div>
+          <div className="space-y-1"><Label>Category</Label><Input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="optional" /></div>
+          <div className="space-y-1"><Label>Unit</Label><Input value={unit} onChange={(e) => setUnit(e.target.value)} /></div>
+          <div className="space-y-1"><Label>Cost ৳</Label><Input inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} /></div>
+          <div className="space-y-1"><Label>Selling price ৳</Label><Input inputMode="decimal" value={sell} onChange={(e) => setSell(e.target.value)} placeholder="= cost" /></div>
+          <div className="space-y-1"><Label>SKU</Label><Input value={sku} onChange={(e) => setSku(e.target.value)} placeholder="optional" /></div>
+          <div className="space-y-1"><Label>Barcode</Label><Input value={barcode} onChange={(e) => setBarcode(e.target.value)} placeholder="optional" /></div>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" onClick={onClose} disabled={save.isPending}>Cancel</Button>
+          <Button onClick={() => save.mutate()} disabled={save.isPending || !name.trim()}>
+            {save.isPending ? "Saving..." : "Save product"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
