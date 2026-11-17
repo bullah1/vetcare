@@ -66,7 +66,7 @@ const emptyLine = (): LineInput => ({ quantity: "", unit_price: "", total: "", s
 const focusSelect = (el: HTMLInputElement | null) => { el?.focus(); el?.select(); };
 
 export function PurchaseEntryDialog({
-  open, onOpenChange, suppliers, products, onCreated, startWithUpload = false, refreshProducts, editing,
+  open, onOpenChange, suppliers, products, onCreated, startWithUpload = false, refreshProducts, refreshSuppliers, editing, page = false,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -75,12 +75,16 @@ export function PurchaseEntryDialog({
   onCreated: (created?: { id: string; invoice_no?: string }) => void;
   startWithUpload?: boolean;
   refreshProducts: () => Promise<unknown>;
+  refreshSuppliers?: () => Promise<unknown>;
+  /** Show as a full page (inline) instead of a popup. */
+  page?: boolean;
   /** Open an existing purchase to change it (same invoice number; stock moves by the difference). */
   editing?: EditPurchase | null;
 }) {
   const [uploadOpen, setUploadOpen] = useState(startWithUpload && !editing);
   // Product not found while typing: create it here, then pick it into the line.
   const [quickName, setQuickName] = useState<string | null>(null);
+  const [quickSupplier, setQuickSupplier] = useState(false);
   const [pendingPick, setPendingPick] = useState<string | null>(null);
   const [supplierId, setSupplierId] = useState(editing?.supplier_id ?? "");
   const [supplierInvoiceNo, setSupplierInvoiceNo] = useState(editing?.supplier_invoice_no ?? "");
@@ -367,27 +371,27 @@ export function PurchaseEntryDialog({
     ? [entryProduct.sku && `SKU ${entryProduct.sku}`, entryProduct.unit, `Stock ${qtyFmt(entryProduct.stock_quantity)}`, `Last cost ৳${qtyFmt(entryProduct.purchase_price)}`].filter(Boolean).join("   ")
     : null;
 
-  return (
-    <Dialog open={open} onOpenChange={requestClose}>
-      <DialogContent
-        className="flex h-[96vh] max-h-[96vh] max-w-6xl flex-col gap-0 overflow-y-auto p-0 sm:p-0 md:overflow-hidden"
-        onEscapeKeyDown={(e) => { if (dirty) e.preventDefault(); }}
-        onInteractOutside={(e) => { if (dirty) e.preventDefault(); }}
-        onOpenAutoFocus={(e) => { e.preventDefault(); if (!startWithUpload) requestAnimationFrame(() => focusSelect(searchRef.current)); }}
-        onKeyDown={(e) => {
-          if ((e.ctrlKey || e.metaKey) && (e.key === "Enter" || e.key.toLowerCase() === "s")) { e.preventDefault(); save(); }
-          else if (e.key === "F2") { e.preventDefault(); focusSelect(searchRef.current); }
-        }}
-      >
-        {/* Header: supplier + invoice details */}
+  const TitleEl = page ? "h2" : DialogTitle;
+  const DescEl = page ? "p" : DialogDescription;
+  const shortcuts = (e: KeyboardEvent<HTMLElement>) => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === "Enter" || e.key.toLowerCase() === "s")) { e.preventDefault(); save(); }
+    else if (e.key === "F2") { e.preventDefault(); focusSelect(searchRef.current); }
+  };
+  useEffect(() => {
+    if (page && !startWithUpload) requestAnimationFrame(() => focusSelect(searchRef.current));
+  }, [page]);
+  const bodyEl = (
+    <>        {/* Header: supplier + invoice details */}
         <div className="border-b px-4 py-3 pr-12 sm:px-5">
-          <DialogTitle className="text-lg font-semibold">{editing ? `Edit purchase ${editing.invoice_no}` : "New purchase"}</DialogTitle>
-          <DialogDescription className="sr-only">Add products with the keyboard and save the purchase invoice.</DialogDescription>
+          {page && <Button variant="ghost" size="sm" className="mb-1 -ml-2" onClick={() => requestClose(false)}>← Back to purchases</Button>}
+          <TitleEl className="text-lg font-semibold">{editing ? `Edit purchase ${editing.invoice_no}` : "New purchase"}</TitleEl>
+          <DescEl className="sr-only">Add products with the keyboard and save the purchase invoice.</DescEl>
           <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,160px)]">
             <div className="col-span-2 min-w-0 sm:col-span-1">
-              <Select value={supplierId} onValueChange={setSupplierId}>
+              <Select value={supplierId} onValueChange={(v) => { if (v === "__new__") setQuickSupplier(true); else setSupplierId(v); }}>
                 <SelectTrigger className="h-9" aria-label="Supplier"><SelectValue placeholder="Supplier (optional)" /></SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="__new__">➕ New supplier</SelectItem>
                   {suppliers.map((s) => (
                     <SelectItem key={s.id} value={s.id}>
                       <span className="inline-flex items-center gap-2">{s.name}{s.business !== undefined && <BusinessBadge biz={s.business} />}</span>
@@ -534,6 +538,16 @@ export function PurchaseEntryDialog({
           </div>
         </div>
 
+        {quickSupplier && (
+          <QuickSupplierDialog
+            onClose={() => setQuickSupplier(false)}
+            onCreated={async (row) => {
+              await refreshSuppliers?.();
+              setQuickSupplier(false);
+              setSupplierId(row.id);
+            }}
+          />
+        )}
         {quickName !== null && (
           <QuickProductDialog
             initialName={quickName}
@@ -546,6 +560,25 @@ export function PurchaseEntryDialog({
           />
         )}
         <PurchaseImportDialog open={uploadOpen} onOpenChange={setUploadOpen} products={products} onApply={applyUpload} />
+    </>
+  );
+  if (page) {
+    return (
+      <div className="flex min-h-[70vh] flex-col rounded-lg border bg-background" onKeyDown={shortcuts}>
+        {bodyEl}
+      </div>
+    );
+  }
+  return (
+    <Dialog open={open} onOpenChange={requestClose}>
+      <DialogContent
+        className="flex h-[96vh] max-h-[96vh] max-w-6xl flex-col gap-0 overflow-y-auto p-0 sm:p-0 md:overflow-hidden"
+        onEscapeKeyDown={(e) => { if (dirty) e.preventDefault(); }}
+        onInteractOutside={(e) => { if (dirty) e.preventDefault(); }}
+        onOpenAutoFocus={(e) => { e.preventDefault(); if (!startWithUpload) requestAnimationFrame(() => focusSelect(searchRef.current)); }}
+        onKeyDown={shortcuts}
+      >
+        {bodyEl}
       </DialogContent>
     </Dialog>
   );
@@ -778,6 +811,61 @@ function QuickProductDialog({ initialName, onClose, onCreated }: {
           <Button variant="outline" onClick={onClose} disabled={save.isPending}>Cancel</Button>
           <Button onClick={() => save.mutate()} disabled={save.isPending || !name.trim()}>
             {save.isPending ? "Saving..." : "Save product"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Add a supplier without leaving the purchase. */
+function QuickSupplierDialog({ onClose, onCreated }: {
+  onClose: () => void;
+  onCreated: (row: { id: string }) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [business, setBusiness] = useState<"pcv" | "ss" | "both">("pcv");
+  const save = useMutation({
+    mutationFn: async () => {
+      const n = name.trim();
+      if (!n) throw new Error("Enter the supplier name");
+      const { data, error } = await (supabase as any).from("suppliers")
+        .insert({ name: n, phone: phone.trim() || null, business })
+        .select("id").single();
+      if (error) throw new Error(error.message);
+      return data as { id: string };
+    },
+    onSuccess: async (row) => {
+      toast.success(`${name.trim()} added`);
+      await onCreated(row);
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Could not add the supplier"),
+  });
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o && !save.isPending) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>New supplier</DialogTitle>
+        <DialogDescription>Added to the supplier list and selected for this purchase.</DialogDescription>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2 space-y-1"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} autoFocus /></div>
+          <div className="space-y-1"><Label>Phone</Label><Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="optional" /></div>
+          <div className="space-y-1">
+            <Label>Business</Label>
+            <Select value={business} onValueChange={(v) => setBusiness(v as "pcv" | "ss" | "both")}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="pcv">Pet Care Vet</SelectItem>
+                <SelectItem value="ss">Sasthya Seba</SelectItem>
+                <SelectItem value="both">Both</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" onClick={onClose} disabled={save.isPending}>Cancel</Button>
+          <Button onClick={() => save.mutate()} disabled={save.isPending || !name.trim()}>
+            {save.isPending ? "Saving..." : "Save supplier"}
           </Button>
         </div>
       </DialogContent>

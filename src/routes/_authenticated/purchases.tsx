@@ -243,6 +243,33 @@ function PurchasesPage() {
     [suppliers]
   );
 
+  // New purchase opens as a full page (not a popup).
+  if (openCreate) {
+    return (
+      <div className="p-0 sm:p-2">
+        <PurchaseEntryDialog
+          page
+          open={openCreate}
+          refreshProducts={() => qc.refetchQueries({ queryKey: ["products-purchase"] })}
+          refreshSuppliers={() => qc.refetchQueries({ queryKey: ["suppliers"] })}
+          onOpenChange={setOpenCreate}
+          suppliers={suppliers}
+          products={products}
+          startWithUpload={startUpload}
+          onCreated={(created) => {
+            if (created?.id) setLabelFor({ id: created.id, invoice_no: created.invoice_no ?? "" });
+            qc.invalidateQueries({ queryKey: ["purchase_invoices"] });
+            qc.invalidateQueries({ queryKey: ["suppliers"] });
+            qc.invalidateQueries({ queryKey: ["products-purchase"] });
+            qc.invalidateQueries({ queryKey: ["products"] });
+            qc.invalidateQueries({ queryKey: ["pos-products"] });
+            qc.invalidateQueries({ queryKey: ["batches"] });
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="p-0 sm:p-2">
       <PageHeader
@@ -421,25 +448,6 @@ function PurchasesPage() {
 
       <SupplierLedgerDialog open={ledgerOpen} onOpenChange={setLedgerOpen} suppliers={suppliers} />
 
-      {openCreate && (
-        <PurchaseEntryDialog
-          open={openCreate}
-          refreshProducts={() => qc.refetchQueries({ queryKey: ["products-purchase"] })}
-          onOpenChange={setOpenCreate}
-          suppliers={suppliers}
-          products={products}
-          startWithUpload={startUpload}
-          onCreated={(created) => {
-            if (created?.id) setLabelFor({ id: created.id, invoice_no: created.invoice_no ?? "" });
-            qc.invalidateQueries({ queryKey: ["purchase_invoices"] });
-            qc.invalidateQueries({ queryKey: ["suppliers"] });
-            qc.invalidateQueries({ queryKey: ["products-purchase"] });
-            qc.invalidateQueries({ queryKey: ["products"] });
-      qc.invalidateQueries({ queryKey: ["pos-products"] });
-            qc.invalidateQueries({ queryKey: ["batches"] });
-          }}
-        />
-      )}
 
       {editPurchase && (
         <PurchaseEntryDialog
