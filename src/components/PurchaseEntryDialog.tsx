@@ -774,7 +774,7 @@ function QuickProductDialog({ initialName, onClose, onCreated }: {
   onCreated: (row: { id: string }) => Promise<void>;
 }) {
   const [name, setName] = useState(initialName);
-  const [category, setCategory] = useState("");
+  const [project, setProject] = useState<"pcv" | "ss">("pcv");
   const [unit, setUnit] = useState("pcs");
   const [cost, setCost] = useState("");
   const [sell, setSell] = useState("");
@@ -787,7 +787,7 @@ function QuickProductDialog({ initialName, onClose, onCreated }: {
       const c = Number(cost) || 0;
       const { data, error } = await (supabase as any).from("products").insert({
         name: n, sku: sku.trim() || null, barcode: barcode.trim() || null,
-        category: category.trim() || null, unit: unit.trim() || "pcs",
+        project, unit: unit.trim() || "pcs",
         purchase_price: c, selling_price: sell.trim() ? Number(sell) : c,
         stock_quantity: 0, is_active: true,
       }).select("id").single();
@@ -807,7 +807,16 @@ function QuickProductDialog({ initialName, onClose, onCreated }: {
         <DialogDescription>Stock is 0 now. The purchase line adds the stock.</DialogDescription>
         <div className="grid grid-cols-2 gap-3">
           <div className="col-span-2 space-y-1"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} autoFocus /></div>
-          <div className="space-y-1"><Label>Category</Label><Input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="optional" /></div>
+          <div className="space-y-1">
+            <Label>Business</Label>
+            <Select value={project} onValueChange={(v) => setProject(v as "pcv" | "ss")}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="pcv">Pet Care Vet</SelectItem>
+                <SelectItem value="ss">Sasthya Seba</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <div className="space-y-1"><Label>Unit</Label><Input value={unit} onChange={(e) => setUnit(e.target.value)} /></div>
           <div className="space-y-1"><Label>Cost ৳</Label><Input inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} /></div>
           <div className="space-y-1"><Label>Selling price ৳</Label><Input inputMode="decimal" value={sell} onChange={(e) => setSell(e.target.value)} placeholder="= cost" /></div>
