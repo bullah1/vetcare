@@ -1,11 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pill, Plus, Printer, Search, Settings2, Trash2, X } from "lucide-react";
+import { Pill, Plus, Printer, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
-import { RxPrintSettingsDialog } from "@/components/RxPrintSettingsDialog";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -150,7 +149,6 @@ function PrescriptionsPage() {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
-  const [printSetup, setPrintSetup] = useState(false);
   const [viewing, setViewing] = useState<any | null>(null);
 
   const [petId, setPetId] = useState<string>("");
@@ -291,17 +289,11 @@ function PrescriptionsPage() {
         description="Create, search and print prescriptions issued to pets."
         icon={Pill}
         actions={
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={() => setPrintSetup(true)}>
-              <Settings2 className="mr-2 h-4 w-4" /> Print setup
-            </Button>
-            <Button onClick={() => setOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" /> New Prescription
-            </Button>
-          </div>
+          <Button onClick={() => setOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" /> New Prescription
+          </Button>
         }
       />
-      <RxPrintSettingsDialog open={printSetup} onOpenChange={setPrintSetup} />
 
       <div className="mb-4 relative max-w-md">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
