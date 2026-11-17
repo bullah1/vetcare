@@ -363,6 +363,8 @@ export function PurchaseEntryDialog({
   const requestClose = (v: boolean) => {
     if (v) return onOpenChange(true);
     if (create.isPending) return;
+    // Page mode: Back keeps the unfinished purchase (it is still here when you come back).
+    if (page) return onOpenChange(false);
     if (dirty && !confirm(editing ? "Close without saving? Your changes will be lost." : "Close without saving? The products you added will be lost.")) return;
     onOpenChange(false);
   };
@@ -447,9 +449,14 @@ export function PurchaseEntryDialog({
                 <Kbd>↑</Kbd><Kbd>↓</Kbd> choose, <Kbd>Enter</Kbd> next field, <Kbd>Enter</Kbd> on a price adds the line, <Kbd>Esc</Kbd> cancel, <Kbd>Ctrl</Kbd>+<Kbd>Enter</Kbd> save
               </p>
             )}
-            <button type="button" onClick={() => setUploadOpen(true)} className="inline-flex items-center gap-1 text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
-              <Upload className="h-3.5 w-3.5" /> Upload Excel / CSV
-            </button>
+            <div className="flex items-center gap-4">
+              <button type="button" onClick={() => setQuickName("")} className="inline-flex items-center gap-1 font-medium text-primary underline-offset-2 hover:underline">
+                <Plus className="h-3.5 w-3.5" /> New product
+              </button>
+              <button type="button" onClick={() => setUploadOpen(true)} className="inline-flex items-center gap-1 text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+                <Upload className="h-3.5 w-3.5" /> Upload Excel / CSV
+              </button>
+            </div>
           </div>
         </div>
 

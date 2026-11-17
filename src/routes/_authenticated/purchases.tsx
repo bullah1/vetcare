@@ -156,6 +156,7 @@ function PurchasesPage() {
     });
   };
   const [startUpload, setStartUpload] = useState(false);
+  const [newKey, setNewKey] = useState(0);
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const [viewId, setViewId] = useState<string | null>(null);
   const [returnFor, setReturnFor] = useState<string | null>(null);
@@ -164,7 +165,8 @@ function PurchasesPage() {
   const [labelFor, setLabelFor] = useState<{ id: string; invoice_no: string } | null>(null);
   const [search, setSearch] = useState("");
   // "all" or a month "YYYY-MM" (by invoice date).
-  const [month, setMonth] = useState<string>("all");
+  // Always opens on the running month; the month picker can still show other months or all.
+  const [month, setMonth] = useState<string>(() => monthKey(new Date()));
   const monthOptions = useMemo(() => {
     const out: string[] = [];
     const d = new Date();
@@ -243,35 +245,35 @@ function PurchasesPage() {
     [suppliers]
   );
 
-  // New purchase opens as a full page (not a popup).
-  if (openCreate) {
-    return (
-      <div className="p-0 sm:p-2">
-        <PurchaseEntryDialog
-          page
-          open={openCreate}
-          refreshProducts={() => qc.refetchQueries({ queryKey: ["products-purchase"] })}
-          refreshSuppliers={() => qc.refetchQueries({ queryKey: ["suppliers"] })}
-          onOpenChange={setOpenCreate}
-          suppliers={suppliers}
-          products={products}
-          startWithUpload={startUpload}
-          onCreated={(created) => {
-            if (created?.id) setLabelFor({ id: created.id, invoice_no: created.invoice_no ?? "" });
-            qc.invalidateQueries({ queryKey: ["purchase_invoices"] });
-            qc.invalidateQueries({ queryKey: ["suppliers"] });
-            qc.invalidateQueries({ queryKey: ["products-purchase"] });
-            qc.invalidateQueries({ queryKey: ["products"] });
-            qc.invalidateQueries({ queryKey: ["pos-products"] });
-            qc.invalidateQueries({ queryKey: ["batches"] });
-          }}
-        />
-      </div>
-    );
-  }
+  // New purchase is a page (not a popup). It stays mounted, so an unfinished purchase survives Back.
+  const newPage = (
+          <PurchaseEntryDialog
+            key={`${newKey}-${startUpload}`}
+            page
+            open={openCreate}
+            refreshProducts={() => qc.refetchQueries({ queryKey: ["products-purchase"] })}
+            refreshSuppliers={() => qc.refetchQueries({ queryKey: ["suppliers"] })}
+            onOpenChange={setOpenCreate}
+            suppliers={suppliers}
+            products={products}
+            startWithUpload={startUpload}
+            onCreated={(created) => {
+              if (created?.id) setLabelFor({ id: created.id, invoice_no: created.invoice_no ?? "" });
+              qc.invalidateQueries({ queryKey: ["purchase_invoices"] });
+              qc.invalidateQueries({ queryKey: ["suppliers"] });
+              qc.invalidateQueries({ queryKey: ["products-purchase"] });
+              qc.invalidateQueries({ queryKey: ["products"] });
+              qc.invalidateQueries({ queryKey: ["pos-products"] });
+              qc.invalidateQueries({ queryKey: ["batches"] });
+              setNewKey((k) => k + 1);
+            }}
+          />
+  );
 
   return (
-    <div className="p-0 sm:p-2">
+    <>
+    <div className={openCreate ? "p-0 sm:p-2" : "hidden"}>{newPage}</div>
+    <div className={openCreate ? "hidden" : "p-0 sm:p-2"}>
       <PageHeader
         title="Purchases"
         description="Supplier invoices, stock receipts & payables"
@@ -509,6 +511,7 @@ function PurchasesPage() {
         />
       )}
     </div>
+    </>
   );
 }
 
