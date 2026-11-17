@@ -38,6 +38,44 @@ export type RxPrintData = {
   } | null;
 };
 
+/** Pre-printed A4 letterhead paper: unprintable/blank margins in mm (top, sides, bottom). */
+export const PREPRINT_MARGIN = { top: 9, side: 5.5, bottom: 3 } as const;
+
+export type RxPrintCalibration = { preprinted: boolean; offsetX: number; offsetY: number };
+
+const CAL_KEY = "rx.print.calibration.v1";
+
+/** Per-device printer calibration (localStorage). Safe to call anywhere. */
+export function getRxCalibration(): RxPrintCalibration {
+  const fallback: RxPrintCalibration = { preprinted: false, offsetX: 0, offsetY: 0 };
+  try {
+    const raw = typeof window !== "undefined" ? window.localStorage.getItem(CAL_KEY) : null;
+    if (!raw) return fallback;
+    const v = JSON.parse(raw) as Partial<RxPrintCalibration>;
+    return {
+      preprinted: !!v.preprinted,
+      offsetX: Number(v.offsetX) || 0,
+      offsetY: Number(v.offsetY) || 0,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+export function setRxCalibration(c: RxPrintCalibration) {
+  try {
+    window.localStorage.setItem(CAL_KEY, JSON.stringify(c));
+  } catch {
+    /* ignore — calibration just won't persist */
+  }
+}
+
+const PREPRINT_CSS = (x: number, y: number) => `
+  .pp header{border-bottom:0}
+  .pp header:after{display:none}
+  .pp .brand,.pp footer{visibility:hidden}
+  .pp .sheet{max-width:none;min-height:0;padding:0;transform:translate(${x}mm,${y}mm)}`;
+
 function esc(s: unknown) {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
@@ -55,6 +93,8 @@ function block(label: string, value?: string | null) {
 export function printClinicalPrescription(data: RxPrintData) {
   const C = getClinic();
   const theme = getBrandTheme();
+  const cal = getRxCalibration();
+  const pre = cal.preprinted;
   const date = new Date(data.date);
   const patient = [
     ["Pet", data.pet.name],
@@ -105,7 +145,7 @@ export function printClinicalPrescription(data: RxPrintData) {
   const html = `<!doctype html><html><head><meta charset="utf-8">
 <title>${esc(data.rxNo)} — ${esc(data.pet.name)}</title>
 <style>
-  @page{size:A4;margin:10mm}
+  @page{size:A4;margin:${pre ? `${PREPRINT_MARGIN.top}mm ${PREPRINT_MARGIN.side}mm ${PREPRINT_MARGIN.bottom}mm` : "10mm"}}
   *{box-sizing:border-box}
   :root{--brand:${theme.primary};--ink:#151719;--quiet:#697077;--line:#dedede;--wash:#f7f7f6;--warm:#fbfaf8}
   html,body{margin:0;padding:0;background:#fff;color:var(--ink);font:11.5px/1.48 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;letter-spacing:0}
@@ -157,7 +197,8 @@ export function printClinicalPrescription(data: RxPrintData) {
   footer{margin-top:auto;border-top:1px solid var(--line);padding-top:7px;font-size:8px;color:#929292;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px}
   footer .wish{color:var(--brand);font-weight:600}footer .page{text-align:center}footer .ref{text-align:right}
   @media print{.noprint{display:none}}
-</style></head><body>
+  ${pre ? PREPRINT_CSS(Number(cal.offsetX) || 0, Number(cal.offsetY) || 0) : ""}
+</style></head><body class="${pre ? "pp" : ""}">
 <div class="sheet">
   <header>
     <div class="brand">
@@ -224,6 +265,34 @@ export function printClinicalPrescription(data: RxPrintData) {
 <script>window.onload=function(){window.print()}</script>
 </body></html>`;
 
+  const w = window.open("", "_blank", "width=900,height=1000");
+  if (!w) return false;
+  w.document.write(html);
+  w.document.close();
+  return true;
+}
+
+/** Test sheet: prints the print area and a 10 mm grid so the offsets can be checked against the form. */
+export function printRxCalibrationPage() {
+  const W = 210 - PREPRINT_MARGIN.side * 2;
+  const H = 297 - PREPRINT_MARGIN.top - PREPRINT_MARGIN.bottom;
+  const hLines = Array.from({ length: Math.floor(297 / 10) + 1 }, (_, i) =>
+    `<div style="position:absolute;left:0;right:0;top:${i * 10}mm;border-top:${i % 5 === 0 ? "0.4mm" : "0.15mm"} solid ${i % 5 === 0 ? "#e11" : "#999"}"></div>` +
+    (i % 5 === 0 ? `<span style="position:absolute;left:1mm;top:${i * 10 + 0.5}mm;font:7px sans-serif;color:#e11">${i * 10}</span>` : ""),
+  ).join("");
+  const vLines = Array.from({ length: Math.floor(210 / 10) + 1 }, (_, i) =>
+    `<div style="position:absolute;top:0;bottom:0;left:${i * 10}mm;border-left:${i % 5 === 0 ? "0.4mm" : "0.15mm"} solid ${i % 5 === 0 ? "#e11" : "#999"}"></div>` +
+    (i % 5 === 0 ? `<span style="position:absolute;top:1mm;left:${i * 10 + 0.5}mm;font:7px sans-serif;color:#e11">${i * 10}</span>` : ""),
+  ).join("");
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Rx calibration</title>
+<style>@page{size:A4;margin:0} html,body{margin:0;padding:0}
+.page{position:relative;width:210mm;height:297mm;overflow:hidden;background:#fff}
+.area{position:absolute;left:${PREPRINT_MARGIN.side}mm;top:${PREPRINT_MARGIN.top}mm;width:${W}mm;height:${H}mm;outline:0.3mm dashed #06c}
+.cross{position:absolute;left:105mm;top:148.5mm;width:10mm;height:10mm;border-left:0.3mm solid #000;border-top:0.3mm solid #000}
+</style></head><body><div class="page">${hLines}${vLines}
+<div class="area"></div><div class="cross"></div>
+<div style="position:absolute;left:${PREPRINT_MARGIN.side + 2}mm;top:${PREPRINT_MARGIN.top + 2}mm;font:9px sans-serif;color:#06c">Blue box = print area (top ${PREPRINT_MARGIN.top}, sides ${PREPRINT_MARGIN.side}, bottom ${PREPRINT_MARGIN.bottom} mm)</div>
+</div><script>window.onload=function(){window.print()}</script></body></html>`;
   const w = window.open("", "_blank", "width=900,height=1000");
   if (!w) return false;
   w.document.write(html);
