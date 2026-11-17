@@ -47,7 +47,8 @@ export const PurchaseItemSearch = forwardRef<HTMLInputElement, Props>(function P
       else if (codeMatch(p.sku, q) || codeMatch(p.barcode, q)) scored.push({ p, ranges: [], score: 900 });
     }
     scored.sort((a, b) => b.score - a.score);
-    return [...exact, ...scored].slice(0, 40);
+    // Every match, closest first (exact code, then best name match).
+    return [...exact, ...scored];
   }, [products, query]);
 
   useEffect(() => { setActive(0); }, [query]);
@@ -106,8 +107,12 @@ export const PurchaseItemSearch = forwardRef<HTMLInputElement, Props>(function P
           className="absolute left-0 right-0 top-full z-50 mt-1 max-h-80 overflow-y-auto rounded-lg border bg-popover p-1 shadow-lg"
         >
           {results.length === 0 ? (
-            <li className="px-3 py-3 text-sm text-muted-foreground">No product found. Press Enter to check the barcode, or create the product in Inventory.</li>
-          ) : results.map(({ p, ranges }, i) => (
+            <li className="px-3 py-3 text-sm text-muted-foreground">No product found. Press Enter to check the barcode, or use "New product" below.</li>
+          ) : (<>
+            <li className="px-3 pb-1 pt-1 text-xs text-muted-foreground" role="presentation">
+              {results.length} {results.length === 1 ? "product" : "products"} match — closest first
+            </li>
+          {results.map(({ p, ranges }, i) => (
             <li
               key={p.id}
               id={`${listId}-${i}`}
@@ -128,10 +133,12 @@ export const PurchaseItemSearch = forwardRef<HTMLInputElement, Props>(function P
                 </div>
               </div>
               <span className="shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                Last cost<br /><span className="text-sm font-medium text-foreground">৳{fmt(p.purchase_price)}</span>
+                {i === 0 && <span className="mb-0.5 mr-1 inline-block rounded bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground">Best match</span>}
+                <br />Last cost<br /><span className="text-sm font-medium text-foreground">৳{fmt(p.purchase_price)}</span>
               </span>
             </li>
           ))}
+          </>)}
         </ul>
       )}
     </div>
