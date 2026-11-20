@@ -87,6 +87,29 @@ function DataMovePage() {
     setMessage(failures ? `Finished with ${failures} problem(s) — see the red rows.` : "All tables and files copied.");
   };
 
+  const copyFiles = async () => {
+    setRunning(true);
+    setMessage("Copying files…");
+    let failures = 0;
+    for (const bucket of DATA_MOVE_BUCKETS) {
+      const name = `storage: ${bucket}`;
+      patch(name, { status: "copying" });
+      try {
+        const r = await copyBucket({ data: { bucket } });
+        if (r.failed.length) failures += 1;
+        patch(name, {
+          status: `done (${r.copied}/${r.total})`,
+          note: r.failed.length ? `Failed: ${r.failed.slice(0, 5).join(", ")}` : undefined,
+        });
+      } catch (e: any) {
+        failures += 1;
+        patch(name, { status: "failed", note: e?.message ?? String(e) });
+      }
+    }
+    setRunning(false);
+    setMessage(failures ? "Some files failed — see the red rows." : "All files copied.");
+  };
+
   if (!isAdmin) {
     return <div className="p-6 text-sm text-muted-foreground">Only an admin can open this page.</div>;
   }
@@ -99,8 +122,7 @@ function DataMovePage() {
         icon={DatabaseZap}
         actions={
           <div className="flex gap-2">
-            <Button variant="outline" onClick={verify} disabled={running}>Check counts</Button>
-            <Button onClick={start} disabled={running}>{running ? "Copying…" : "Start copy"}</Button>
+            <Button onClick={copyFiles} disabled={running}>{running ? "Copying…" : "Copy files"}</Button>
           </div>
         }
       />
