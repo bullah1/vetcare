@@ -25,6 +25,7 @@ import { Route as AuthenticatedClinicalIntelligenceRouteImport } from './routes/
 import { Route as AuthenticatedClinicalVisitRouteImport } from './routes/_authenticated/clinical-visit'
 import { Route as AuthenticatedCrmRouteImport } from './routes/_authenticated/crm'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
+import { Route as AuthenticatedDataMoveRouteImport } from './routes/_authenticated/data-move'
 import { Route as AuthenticatedDeliveriesRouteImport } from './routes/_authenticated/deliveries'
 import { Route as AuthenticatedDeliveryReportRouteImport } from './routes/_authenticated/delivery-report'
 import { Route as AuthenticatedDueBillsRouteImport } from './routes/_authenticated/due-bills'
@@ -130,6 +131,11 @@ const AuthenticatedCrmRoute = AuthenticatedCrmRouteImport.update({
 const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedDataMoveRoute = AuthenticatedDataMoveRouteImport.update({
+  id: '/data-move',
+  path: '/data-move',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedDeliveriesRoute = AuthenticatedDeliveriesRouteImport.update({
@@ -257,6 +263,7 @@ export interface FileRoutesByFullPath {
   '/clinical-visit': typeof AuthenticatedClinicalVisitRoute
   '/crm': typeof AuthenticatedCrmRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/data-move': typeof AuthenticatedDataMoveRoute
   '/deliveries': typeof AuthenticatedDeliveriesRoute
   '/delivery-report': typeof AuthenticatedDeliveryReportRoute
   '/due-bills': typeof AuthenticatedDueBillsRoute
@@ -294,6 +301,7 @@ export interface FileRoutesByTo {
   '/clinical-visit': typeof AuthenticatedClinicalVisitRoute
   '/crm': typeof AuthenticatedCrmRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/data-move': typeof AuthenticatedDataMoveRoute
   '/deliveries': typeof AuthenticatedDeliveriesRoute
   '/delivery-report': typeof AuthenticatedDeliveryReportRoute
   '/due-bills': typeof AuthenticatedDueBillsRoute
@@ -333,6 +341,7 @@ export interface FileRoutesById {
   '/_authenticated/clinical-visit': typeof AuthenticatedClinicalVisitRoute
   '/_authenticated/crm': typeof AuthenticatedCrmRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
+  '/_authenticated/data-move': typeof AuthenticatedDataMoveRoute
   '/_authenticated/deliveries': typeof AuthenticatedDeliveriesRoute
   '/_authenticated/delivery-report': typeof AuthenticatedDeliveryReportRoute
   '/_authenticated/due-bills': typeof AuthenticatedDueBillsRoute
@@ -372,6 +381,7 @@ export interface FileRouteTypes {
     | '/clinical-visit'
     | '/crm'
     | '/dashboard'
+    | '/data-move'
     | '/deliveries'
     | '/delivery-report'
     | '/due-bills'
@@ -409,6 +419,7 @@ export interface FileRouteTypes {
     | '/clinical-visit'
     | '/crm'
     | '/dashboard'
+    | '/data-move'
     | '/deliveries'
     | '/delivery-report'
     | '/due-bills'
@@ -447,6 +458,7 @@ export interface FileRouteTypes {
     | '/_authenticated/clinical-visit'
     | '/_authenticated/crm'
     | '/_authenticated/dashboard'
+    | '/_authenticated/data-move'
     | '/_authenticated/deliveries'
     | '/_authenticated/delivery-report'
     | '/_authenticated/due-bills'
@@ -588,6 +600,13 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof AuthenticatedDashboardRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/data-move': {
+      id: '/_authenticated/data-move'
+      path: '/data-move'
+      fullPath: '/data-move'
+      preLoaderRoute: typeof AuthenticatedDataMoveRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/deliveries': {
@@ -747,6 +766,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedClinicalVisitRoute: typeof AuthenticatedClinicalVisitRoute
   AuthenticatedCrmRoute: typeof AuthenticatedCrmRoute
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
+  AuthenticatedDataMoveRoute: typeof AuthenticatedDataMoveRoute
   AuthenticatedDeliveriesRoute: typeof AuthenticatedDeliveriesRoute
   AuthenticatedDeliveryReportRoute: typeof AuthenticatedDeliveryReportRoute
   AuthenticatedDueBillsRoute: typeof AuthenticatedDueBillsRoute
@@ -783,6 +803,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedClinicalVisitRoute: AuthenticatedClinicalVisitRoute,
   AuthenticatedCrmRoute: AuthenticatedCrmRoute,
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
+  AuthenticatedDataMoveRoute: AuthenticatedDataMoveRoute,
   AuthenticatedDeliveriesRoute: AuthenticatedDeliveriesRoute,
   AuthenticatedDeliveryReportRoute: AuthenticatedDeliveryReportRoute,
   AuthenticatedDueBillsRoute: AuthenticatedDueBillsRoute,
