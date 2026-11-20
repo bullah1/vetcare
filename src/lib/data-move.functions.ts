@@ -5,8 +5,8 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 /**
  * TEMPORARY one-time tool: copies every table and storage file from the current
  * (Lovable Cloud) database to the new Supabase project. Reads use the signed-in
- * admin's session on the old database; writes use NEW_SUPABASE_SERVICE_ROLE_KEY,
- * which lives only in the server environment. Re-running is safe (upsert by key).
+ * admin's session on the old database; writes go through a temporary function on
+ * the new database. Re-running is safe (existing rows are skipped).
  * Remove this file and the /data-move page after the move.
  */
 
@@ -44,22 +44,15 @@ async function assertAdmin(context: Ctx) {
   if (data !== true) throw new Error("Admin only");
 }
 
+// New Supabase project (Petcarevetpos). Public URL + publishable (anon) key only —
+// writes go through the temporary public._move_insert function, which exists only
+// during the move window and is dropped afterwards.
+const NEW_URL = "https://sjrojnbpahcmggqyjzch.supabase.co";
+const NEW_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNqcm9qbmJwYWhjbWdncXlqemNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUxODg5NTMsImV4cCI6MjExMDc2NDk1M30.M6Jde9oK-aNiku7_Mat6csZfG1aKRiDC9RtSkhQWMXA";
+
 function newClient() {
-  const url = process.env["NEW_SUPABASE_URL"];
-  const key = process.env["NEW_SUPABASE_SERVICE_ROLE_KEY"];
-  if (!url || !key) {
-    throw new Error("NEW_SUPABASE_URL / NEW_SUPABASE_SERVICE_ROLE_KEY are not set in Vercel. Add them and redeploy.");
-  }
-  const opaque = key.startsWith("sb_secret_") || key.startsWith("sb_publishable_");
-  const fetchWithKey: typeof fetch = (input, init) => {
-    const headers = new Headers(typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined);
-    if (init?.headers) new Headers(init.headers).forEach((v, k) => headers.set(k, v));
-    if (opaque && headers.get("Authorization") === `Bearer ${key}`) headers.delete("Authorization");
-    headers.set("apikey", key);
-    return fetch(input, { ...init, headers });
-  };
-  return createClient(url, key, {
-    global: { fetch: fetchWithKey },
+  return createClient(NEW_URL, NEW_ANON_KEY, {
     auth: { storage: undefined, persistSession: false, autoRefreshToken: false },
   });
 }
@@ -80,12 +73,12 @@ export const dataMoveCounts = createServerFn({ method: "POST" })
       checkTable(table);
       const [a, b] = await Promise.all([
         (context as Ctx).supabase.from(table).select("*", { count: "exact", head: true }),
-        target.from(table).select("*", { count: "exact", head: true }),
+        target.rpc("_move_count", { _table: table }),
       ]);
       out.push({
         table,
         source: a.count ?? null,
-        target: b.count ?? null,
+        target: b.error ? null : Number(b.data),
         error: a.error?.message || b.error?.message || undefined,
       });
     }
@@ -106,7 +99,7 @@ export const dataMoveTablePage = createServerFn({ method: "POST" })
     if (error) throw new Error(`${data.table}: read failed — ${error.message}`);
     const list = (rows ?? []) as Record<string, unknown>[];
     if (list.length > 0) {
-      const { error: wErr } = await newClient().from(data.table).upsert(list, { onConflict: pk });
+      const { error: wErr } = await newClient().rpc("_move_insert", { _table: data.table, _rows: list });
       if (wErr) throw new Error(`${data.table}: write failed — ${wErr.message}`);
     }
     return { copied: list.length, done: list.length < PAGE };
@@ -142,8 +135,8 @@ export const dataMoveBucket = createServerFn({ method: "POST" })
     for (const path of files) {
       const { data: blob, error } = await src.download(path);
       if (error || !blob) { failed.push(path); continue; }
-      const { error: upErr } = await dst.upload(path, blob, { upsert: true, contentType: blob.type || undefined });
-      if (upErr) failed.push(path);
+      const { error: upErr } = await dst.upload(path, blob, { upsert: false, contentType: blob.type || undefined });
+      if (upErr && !/exist|duplicate/i.test(upErr.message)) failed.push(`${path}: ${upErr.message}`);
       else copied += 1;
     }
     return { total: files.length, copied, failed };
