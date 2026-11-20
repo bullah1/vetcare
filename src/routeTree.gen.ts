@@ -44,6 +44,7 @@ import { Route as AuthenticatedReportsRouteImport } from './routes/_authenticate
 import { Route as AuthenticatedSalesHistoryRouteImport } from './routes/_authenticated/sales-history'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
 import { Route as AuthenticatedStaffRouteImport } from './routes/_authenticated/staff'
+import { Route as ApiMoveFilesRouteImport } from './routes/api/move-files'
 import { Route as ApiSteadfastWebhookRouteImport } from './routes/api/steadfast-webhook'
 import { Route as AuthenticatedCustomersIdRouteImport } from './routes/_authenticated/customers.$id'
 
@@ -235,6 +236,11 @@ const AuthenticatedStaffRoute = AuthenticatedStaffRouteImport.update({
   path: '/staff',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const ApiMoveFilesRoute = ApiMoveFilesRouteImport.update({
+  id: '/api/move-files',
+  path: '/api/move-files',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiSteadfastWebhookRoute = ApiSteadfastWebhookRouteImport.update({
   id: '/api/steadfast-webhook',
   path: '/api/steadfast-webhook',
@@ -282,6 +288,7 @@ export interface FileRoutesByFullPath {
   '/sales-history': typeof AuthenticatedSalesHistoryRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/staff': typeof AuthenticatedStaffRoute
+  '/api/move-files': typeof ApiMoveFilesRoute
   '/api/steadfast-webhook': typeof ApiSteadfastWebhookRoute
   '/customers/$id': typeof AuthenticatedCustomersIdRoute
 }
@@ -320,6 +327,7 @@ export interface FileRoutesByTo {
   '/sales-history': typeof AuthenticatedSalesHistoryRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/staff': typeof AuthenticatedStaffRoute
+  '/api/move-files': typeof ApiMoveFilesRoute
   '/api/steadfast-webhook': typeof ApiSteadfastWebhookRoute
   '/customers/$id': typeof AuthenticatedCustomersIdRoute
 }
@@ -360,6 +368,7 @@ export interface FileRoutesById {
   '/_authenticated/sales-history': typeof AuthenticatedSalesHistoryRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/_authenticated/staff': typeof AuthenticatedStaffRoute
+  '/api/move-files': typeof ApiMoveFilesRoute
   '/api/steadfast-webhook': typeof ApiSteadfastWebhookRoute
   '/_authenticated/customers/$id': typeof AuthenticatedCustomersIdRoute
 }
@@ -400,6 +409,7 @@ export interface FileRouteTypes {
     | '/sales-history'
     | '/settings'
     | '/staff'
+    | '/api/move-files'
     | '/api/steadfast-webhook'
     | '/customers/$id'
   fileRoutesByTo: FileRoutesByTo
@@ -438,6 +448,7 @@ export interface FileRouteTypes {
     | '/sales-history'
     | '/settings'
     | '/staff'
+    | '/api/move-files'
     | '/api/steadfast-webhook'
     | '/customers/$id'
   id:
@@ -477,6 +488,7 @@ export interface FileRouteTypes {
     | '/_authenticated/sales-history'
     | '/_authenticated/settings'
     | '/_authenticated/staff'
+    | '/api/move-files'
     | '/api/steadfast-webhook'
     | '/_authenticated/customers/$id'
   fileRoutesById: FileRoutesById
@@ -485,6 +497,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   AuthRoute: typeof AuthRoute
+  ApiMoveFilesRoute: typeof ApiMoveFilesRoute
   ApiSteadfastWebhookRoute: typeof ApiSteadfastWebhookRoute
 }
 
@@ -735,6 +748,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedStaffRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/api/move-files': {
+      id: '/api/move-files'
+      path: '/api/move-files'
+      fullPath: '/api/move-files'
+      preLoaderRoute: typeof ApiMoveFilesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/steadfast-webhook': {
       id: '/api/steadfast-webhook'
       path: '/api/steadfast-webhook'
@@ -832,6 +852,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   AuthRoute: AuthRoute,
+  ApiMoveFilesRoute: ApiMoveFilesRoute,
   ApiSteadfastWebhookRoute: ApiSteadfastWebhookRoute,
 }
 export const routeTree = rootRouteImport
