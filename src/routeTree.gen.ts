@@ -25,7 +25,6 @@ import { Route as AuthenticatedClinicalIntelligenceRouteImport } from './routes/
 import { Route as AuthenticatedClinicalVisitRouteImport } from './routes/_authenticated/clinical-visit'
 import { Route as AuthenticatedCrmRouteImport } from './routes/_authenticated/crm'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
-import { Route as AuthenticatedDataMoveRouteImport } from './routes/_authenticated/data-move'
 import { Route as AuthenticatedDeliveriesRouteImport } from './routes/_authenticated/deliveries'
 import { Route as AuthenticatedDeliveryReportRouteImport } from './routes/_authenticated/delivery-report'
 import { Route as AuthenticatedDueBillsRouteImport } from './routes/_authenticated/due-bills'
@@ -44,7 +43,6 @@ import { Route as AuthenticatedReportsRouteImport } from './routes/_authenticate
 import { Route as AuthenticatedSalesHistoryRouteImport } from './routes/_authenticated/sales-history'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
 import { Route as AuthenticatedStaffRouteImport } from './routes/_authenticated/staff'
-import { Route as ApiMoveFilesRouteImport } from './routes/api/move-files'
 import { Route as ApiSteadfastWebhookRouteImport } from './routes/api/steadfast-webhook'
 import { Route as AuthenticatedCustomersIdRouteImport } from './routes/_authenticated/customers.$id'
 
@@ -132,11 +130,6 @@ const AuthenticatedCrmRoute = AuthenticatedCrmRouteImport.update({
 const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
-  getParentRoute: () => AuthenticatedRouteRoute,
-} as any)
-const AuthenticatedDataMoveRoute = AuthenticatedDataMoveRouteImport.update({
-  id: '/data-move',
-  path: '/data-move',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedDeliveriesRoute = AuthenticatedDeliveriesRouteImport.update({
@@ -236,11 +229,6 @@ const AuthenticatedStaffRoute = AuthenticatedStaffRouteImport.update({
   path: '/staff',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
-const ApiMoveFilesRoute = ApiMoveFilesRouteImport.update({
-  id: '/api/move-files',
-  path: '/api/move-files',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ApiSteadfastWebhookRoute = ApiSteadfastWebhookRouteImport.update({
   id: '/api/steadfast-webhook',
   path: '/api/steadfast-webhook',
@@ -269,7 +257,6 @@ export interface FileRoutesByFullPath {
   '/clinical-visit': typeof AuthenticatedClinicalVisitRoute
   '/crm': typeof AuthenticatedCrmRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
-  '/data-move': typeof AuthenticatedDataMoveRoute
   '/deliveries': typeof AuthenticatedDeliveriesRoute
   '/delivery-report': typeof AuthenticatedDeliveryReportRoute
   '/due-bills': typeof AuthenticatedDueBillsRoute
@@ -288,7 +275,6 @@ export interface FileRoutesByFullPath {
   '/sales-history': typeof AuthenticatedSalesHistoryRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/staff': typeof AuthenticatedStaffRoute
-  '/api/move-files': typeof ApiMoveFilesRoute
   '/api/steadfast-webhook': typeof ApiSteadfastWebhookRoute
   '/customers/$id': typeof AuthenticatedCustomersIdRoute
 }
@@ -308,7 +294,6 @@ export interface FileRoutesByTo {
   '/clinical-visit': typeof AuthenticatedClinicalVisitRoute
   '/crm': typeof AuthenticatedCrmRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
-  '/data-move': typeof AuthenticatedDataMoveRoute
   '/deliveries': typeof AuthenticatedDeliveriesRoute
   '/delivery-report': typeof AuthenticatedDeliveryReportRoute
   '/due-bills': typeof AuthenticatedDueBillsRoute
@@ -327,7 +312,6 @@ export interface FileRoutesByTo {
   '/sales-history': typeof AuthenticatedSalesHistoryRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/staff': typeof AuthenticatedStaffRoute
-  '/api/move-files': typeof ApiMoveFilesRoute
   '/api/steadfast-webhook': typeof ApiSteadfastWebhookRoute
   '/customers/$id': typeof AuthenticatedCustomersIdRoute
 }
@@ -349,7 +333,6 @@ export interface FileRoutesById {
   '/_authenticated/clinical-visit': typeof AuthenticatedClinicalVisitRoute
   '/_authenticated/crm': typeof AuthenticatedCrmRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
-  '/_authenticated/data-move': typeof AuthenticatedDataMoveRoute
   '/_authenticated/deliveries': typeof AuthenticatedDeliveriesRoute
   '/_authenticated/delivery-report': typeof AuthenticatedDeliveryReportRoute
   '/_authenticated/due-bills': typeof AuthenticatedDueBillsRoute
@@ -368,7 +351,6 @@ export interface FileRoutesById {
   '/_authenticated/sales-history': typeof AuthenticatedSalesHistoryRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/_authenticated/staff': typeof AuthenticatedStaffRoute
-  '/api/move-files': typeof ApiMoveFilesRoute
   '/api/steadfast-webhook': typeof ApiSteadfastWebhookRoute
   '/_authenticated/customers/$id': typeof AuthenticatedCustomersIdRoute
 }
@@ -390,7 +372,6 @@ export interface FileRouteTypes {
     | '/clinical-visit'
     | '/crm'
     | '/dashboard'
-    | '/data-move'
     | '/deliveries'
     | '/delivery-report'
     | '/due-bills'
@@ -409,7 +390,6 @@ export interface FileRouteTypes {
     | '/sales-history'
     | '/settings'
     | '/staff'
-    | '/api/move-files'
     | '/api/steadfast-webhook'
     | '/customers/$id'
   fileRoutesByTo: FileRoutesByTo
@@ -429,7 +409,6 @@ export interface FileRouteTypes {
     | '/clinical-visit'
     | '/crm'
     | '/dashboard'
-    | '/data-move'
     | '/deliveries'
     | '/delivery-report'
     | '/due-bills'
@@ -448,7 +427,6 @@ export interface FileRouteTypes {
     | '/sales-history'
     | '/settings'
     | '/staff'
-    | '/api/move-files'
     | '/api/steadfast-webhook'
     | '/customers/$id'
   id:
@@ -469,7 +447,6 @@ export interface FileRouteTypes {
     | '/_authenticated/clinical-visit'
     | '/_authenticated/crm'
     | '/_authenticated/dashboard'
-    | '/_authenticated/data-move'
     | '/_authenticated/deliveries'
     | '/_authenticated/delivery-report'
     | '/_authenticated/due-bills'
@@ -488,7 +465,6 @@ export interface FileRouteTypes {
     | '/_authenticated/sales-history'
     | '/_authenticated/settings'
     | '/_authenticated/staff'
-    | '/api/move-files'
     | '/api/steadfast-webhook'
     | '/_authenticated/customers/$id'
   fileRoutesById: FileRoutesById
@@ -497,7 +473,6 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   AuthRoute: typeof AuthRoute
-  ApiMoveFilesRoute: typeof ApiMoveFilesRoute
   ApiSteadfastWebhookRoute: typeof ApiSteadfastWebhookRoute
 }
 
@@ -613,13 +588,6 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof AuthenticatedDashboardRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/data-move': {
-      id: '/_authenticated/data-move'
-      path: '/data-move'
-      fullPath: '/data-move'
-      preLoaderRoute: typeof AuthenticatedDataMoveRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/deliveries': {
@@ -748,13 +716,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedStaffRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/api/move-files': {
-      id: '/api/move-files'
-      path: '/api/move-files'
-      fullPath: '/api/move-files'
-      preLoaderRoute: typeof ApiMoveFilesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/api/steadfast-webhook': {
       id: '/api/steadfast-webhook'
       path: '/api/steadfast-webhook'
@@ -786,7 +747,6 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedClinicalVisitRoute: typeof AuthenticatedClinicalVisitRoute
   AuthenticatedCrmRoute: typeof AuthenticatedCrmRoute
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
-  AuthenticatedDataMoveRoute: typeof AuthenticatedDataMoveRoute
   AuthenticatedDeliveriesRoute: typeof AuthenticatedDeliveriesRoute
   AuthenticatedDeliveryReportRoute: typeof AuthenticatedDeliveryReportRoute
   AuthenticatedDueBillsRoute: typeof AuthenticatedDueBillsRoute
@@ -823,7 +783,6 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedClinicalVisitRoute: AuthenticatedClinicalVisitRoute,
   AuthenticatedCrmRoute: AuthenticatedCrmRoute,
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
-  AuthenticatedDataMoveRoute: AuthenticatedDataMoveRoute,
   AuthenticatedDeliveriesRoute: AuthenticatedDeliveriesRoute,
   AuthenticatedDeliveryReportRoute: AuthenticatedDeliveryReportRoute,
   AuthenticatedDueBillsRoute: AuthenticatedDueBillsRoute,
@@ -852,7 +811,6 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   AuthRoute: AuthRoute,
-  ApiMoveFilesRoute: ApiMoveFilesRoute,
   ApiSteadfastWebhookRoute: ApiSteadfastWebhookRoute,
 }
 export const routeTree = rootRouteImport
