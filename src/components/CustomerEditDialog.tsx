@@ -5,6 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Pencil } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/lib/auth-context";
 import { markSchemaMissing, schemaMissing } from "@/lib/schema-fallback";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,6 +42,11 @@ export function CustomerEditDialog({ customer, open, onOpenChange, onSaved }: Pr
   // Business (Pet Care Vet / Sasthya Seba / Both) — after the customers & suppliers SQL.
   const [biz, setBiz] = useState<Biz>("pcv");
   const [bizLoaded, setBizLoaded] = useState(false);
+  // Due is closed except COD; an admin can allow due for a verified customer.
+  const [dueAllowed, setDueAllowed] = useState(false);
+  const [dueLoaded, setDueLoaded] = useState(false);
+  const { hasRole } = useAuth();
+  const isAdmin = hasRole("admin");
   const qc = useQueryClient();
 
   useEffect(() => {
@@ -53,6 +59,9 @@ export function CustomerEditDialog({ customer, open, onOpenChange, onSaved }: Pr
     setNotes(customer.notes ?? "");
     setCtypeLoaded(false);
     setBizLoaded(false);
+    setDueLoaded(false);
+    (supabase as any).from("pet_owners").select("due_allowed").eq("id", customer.id).maybeSingle()
+      .then(({ data, error }: any) => { if (!error && data) { setDueAllowed(!!data.due_allowed); setDueLoaded(true); } });
     (supabase as any).from("pet_owners").select("business").eq("id", customer.id).maybeSingle()
       .then(({ data, error }: any) => { if (!error && data) { setBiz(asBiz(data.business)); setBizLoaded(true); } });
     if (schemaMissing("pet_owners.customer_type")) return;
@@ -84,6 +93,10 @@ export function CustomerEditDialog({ customer, open, onOpenChange, onSaved }: Pr
       if (bizLoaded) {
         const { error: bErr } = await (supabase as any).from("pet_owners").update({ business: biz }).eq("id", customer.id);
         if (bErr) throw new Error(`Saved, but business was not saved: ${bErr.message}`);
+      }
+      if (dueLoaded && isAdmin) {
+        const { error: dErr } = await (supabase as any).from("pet_owners").update({ due_allowed: dueAllowed }).eq("id", customer.id);
+        if (dErr) throw new Error(`Saved, but "due allowed" was not saved: ${dErr.message}`);
       }
       if (ctypeLoaded) {
         const { error: tErr } = await (supabase as any).from("pet_owners").update({ customer_type: ctype }).eq("id", customer.id);
@@ -150,6 +163,17 @@ export function CustomerEditDialog({ customer, open, onOpenChange, onSaved }: Pr
               </div>
               {ctype === "b2b" && <p className="text-xs text-muted-foreground">POS uses the wholesale price for this customer, and allowed users can change prices on the bill.</p>}
             </div>
+          )}
+          {dueLoaded && (
+            <label className={`flex items-start justify-between gap-3 rounded-md border p-3 ${isAdmin ? "cursor-pointer" : "opacity-70"}`}>
+              <span className="text-sm">
+                <span className="font-medium">Due allowed (verified customer)</span>
+                <span className="block text-xs text-muted-foreground">
+                  {isAdmin ? "This customer can keep a due at the counter. Everyone else must pay in full, except COD bills." : "Only an admin can change this."}
+                </span>
+              </span>
+              <input type="checkbox" className="mt-0.5 h-4 w-4" checked={dueAllowed} disabled={!isAdmin} onChange={(e) => setDueAllowed(e.target.checked)} />
+            </label>
           )}
           <div className="space-y-2">
             <Label>Address</Label>

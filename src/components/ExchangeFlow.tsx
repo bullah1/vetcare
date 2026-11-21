@@ -63,7 +63,7 @@ export function ExchangeFlow({ invoiceNo, trigger, onPrint }: {
     queryFn: async () => {
       const { data, error } = await (supabase as any)
         .from("sales")
-        .select("id,invoice_no,total,paid,due,discount,status,created_at,project,owner_id, owner:pet_owners(full_name,phone,customer_type), items:sale_items(id,product_id,name,quantity,unit_price,line_total,returned_quantity)")
+        .select("id,invoice_no,total,paid,due,discount,status,created_at,project,owner_id, owner:pet_owners(full_name,phone,customer_type,due_allowed), items:sale_items(id,product_id,name,quantity,unit_price,line_total,returned_quantity)")
         .eq("invoice_no", invoiceNo)
         .maybeSingle();
       if (error) throw error;
@@ -157,7 +157,7 @@ export function ExchangeFlow({ invoiceNo, trigger, onPrint }: {
     lines.length === 0 ? "Add the new product(s) the customer takes." :
     lines.some((l) => !(l.quantity > 0)) ? "Every new product needs a quantity." :
     !reason.trim() ? "Write a reason." :
-    leftDue > 0.009 && !ownerId ? "This bill has no customer — the difference must be paid in full." :
+    leftDue > 0.009 && !sale?.owner?.due_allowed ? "Due is closed — the difference must be paid in full." :
     diff < 0 && leftover === "credit" && !ownerId ? "This bill has no customer — pay the difference back instead." :
     null;
 
@@ -362,7 +362,7 @@ export function ExchangeFlow({ invoiceNo, trigger, onPrint }: {
                   </div>
                   {leftDue > 0.009 && (
                     <p className={`text-xs sm:col-span-2 ${ownerId ? "text-destructive" : "text-destructive font-medium"}`}>
-                      {ownerId ? `${tk(leftDue)} stays as due on the new bill.` : "No customer on this bill — the full difference must be paid."}
+                      {sale.owner?.due_allowed ? `${tk(leftDue)} stays as due on the new bill.` : "Due is closed — the full difference must be paid."}
                     </p>
                   )}
                 </div>

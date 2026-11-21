@@ -48,6 +48,7 @@ type SaleRow = {
   owner: { full_name: string; phone: string | null } | null;
   payments: { method: string; amount: number; received_at: string }[];
   exchange_of_sale_id?: string | null;
+  cod?: boolean | null;
 };
 
 type RangePayment = {
@@ -168,7 +169,7 @@ function SalesHistoryPage() {
       const rows = await fetchAll<SaleRow>(() => {
         let query = supabase
           .from("sales")
-          .select("id,invoice_no,created_at,total,paid,due,status,exchange_of_sale_id, owner:pet_owners(full_name,phone), payments(method,amount,received_at)")
+          .select("id,invoice_no,created_at,total,paid,due,status,exchange_of_sale_id,cod, owner:pet_owners(full_name,phone), payments(method,amount,received_at)")
           .gte("created_at", fromISO)
           .lte("created_at", toISO)
           .order("created_at", { ascending: false });
@@ -543,7 +544,7 @@ function SalesHistoryPage() {
                         </Badge>
                       ))}
                       {Number(s.due) > 0 && (
-                        <Badge variant="secondary" className="text-[11px] bg-destructive/10 text-destructive">Due {fmt(Number(s.due))}</Badge>
+                        <Badge variant="secondary" className="text-[11px] bg-destructive/10 text-destructive">{s.cod ? "COD" : "Due"} {fmt(Number(s.due))}</Badge>
                       )}
                       {Number(s.due) > 0 && courierOrders[s.id] && courierOrders[s.id].status !== "failed" && (
                         <Badge variant="secondary" className="text-[11px] bg-sky-50 text-sky-700">

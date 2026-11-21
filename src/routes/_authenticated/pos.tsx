@@ -356,7 +356,7 @@ type CartLine = {
   price_edited?: boolean;
 };
 
-type Owner = { id: string; full_name: string; phone: string | null; address?: string | null; visitCount?: number; customer_type?: string | null; business?: string | null };
+type Owner = { id: string; full_name: string; phone: string | null; address?: string | null; visitCount?: number; customer_type?: string | null; business?: string | null; due_allowed?: boolean | null };
 
 
 /** "pet_food" → "Pet food" */
@@ -716,7 +716,11 @@ function POSPage() {
     queryFn: () =>
       withSchemaFallback(
         "pet_owners.business",
-        () => fetchAll<Owner>(() => (supabase as any).from("pet_owners").select("id,full_name,phone,address,customer_type,business").order("full_name").order("id")),
+        () => withSchemaFallback(
+          "pet_owners.due_allowed",
+          () => fetchAll<Owner>(() => (supabase as any).from("pet_owners").select("id,full_name,phone,address,customer_type,business,due_allowed").order("full_name").order("id")),
+          () => fetchAll<Owner>(() => (supabase as any).from("pet_owners").select("id,full_name,phone,address,customer_type,business").order("full_name").order("id")),
+        ),
         () => withSchemaFallback(
           "pet_owners.customer_type",
           () => fetchAll<Owner>(() => (supabase as any).from("pet_owners").select("id,full_name,phone,address,customer_type").order("full_name").order("id")),
@@ -1289,6 +1293,11 @@ function POSPage() {
       if (payable - paid > 0.009 && !ownerId) {
         throw new Error("Select a customer for a due sale — the due must be assigned to someone.");
       }
+      // Due is closed: only COD (courier / local delivery) or a verified customer may keep a due.
+      const verified = !!owners.find((o) => o.id === ownerId)?.due_allowed;
+      if (payable - paid > 0.009 && method !== "due" && !verified) {
+        throw new Error("Due is closed — take the full payment, or tick COD for a courier / local delivery bill.");
+      }
       const items = cart.map((l) => {
         const lineSub = l.unit_price * l.quantity - l.discount;
         const lineTax = lineSub * (l.tax_percent / 100);
@@ -1304,10 +1313,11 @@ function POSPage() {
       ];
 
       const args = { _owner_id: ownerId || null, _items: items, _payments: payments, _discount: totals.discount, _notes: null };
+      const cod = method === "due";
       const wrong = cart.find((l) => { const p = byId.get(l.product_id); return p && asProject(p.project) !== project; });
       if (wrong) throw new Error(`${wrong.name.trim()} is not a ${projectLabel(project)} product — remove it and sell it on a separate bill.`);
       // create_project_sale = the normal POS sale (create_pos_sale) + project and its own invoice number.
-      let { data, error } = await (supabase.rpc as any)("create_project_sale", { _project: project, ...args });
+      let { data, error } = await (supabase.rpc as any)("create_project_sale", { _project: project, ...args, _cod: cod });
       const noProjectFn = !!error && (error.code === "PGRST202" || /create_project_sale/.test(error.message ?? ""));
       if (noProjectFn && project === "ss") {
         throw new Error("Sasthya Seba bills need the Projects database update. Ask the admin to run the SQL first.");
@@ -1860,7 +1870,7 @@ function POSPage() {
           </label>
         )}
         <label className="flex cursor-pointer items-center justify-between gap-2 rounded-lg px-1 text-sm">
-          <span className={method === "due" ? "font-medium text-destructive" : "text-muted-foreground"}>Not paid now — keep as due</span>
+          <span className={method === "due" ? "font-medium text-destructive" : "text-muted-foreground"}>COD — Courier / Local delivery (not paid now)</span>
           <input
             type="checkbox"
             className="h-4 w-4 accent-[var(--destructive)]"
@@ -1902,7 +1912,11 @@ function POSPage() {
         )}
         {dueNow > 0.009 && (
           <p className="flex justify-between text-sm text-destructive">
-            <span>{ownerId ? (paidNow <= 0.009 ? "Unpaid — kept as due" : "Due on this bill") : "Choose a customer to keep a due"}</span>
+            <span>{
+              method !== "due" && !owners.find((o) => o.id === ownerId)?.due_allowed
+                ? "Due is closed — take the full payment"
+                : ownerId ? (paidNow <= 0.009 ? "COD — unpaid on this bill" : "Due on this bill") : "Choose a customer to keep a due"
+            }</span>
             <span className="font-semibold tabular-nums">৳ {dueNow.toFixed(2)}</span>
           </p>
         )}
@@ -1923,7 +1937,7 @@ function POSPage() {
             : checkout.isPending
               ? "Saving…"
               : method === "due"
-                ? `Save due bill ৳ ${grandTotal.toFixed(2)}`
+                ? `Save COD bill ৳ ${grandTotal.toFixed(2)}`
                 : `Charge ৳ ${grandTotal.toFixed(2)}`}
         </Button>
         <Button
