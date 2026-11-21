@@ -1,10 +1,10 @@
 import { createFileRoute, Outlet, redirect, useRouterState, Link } from "@tanstack/react-router";
-import { ShieldAlert } from "lucide-react";
+import { ShieldAlert, ChevronLeft } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { SidebarProvider, SidebarTrigger, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
-import { permissionForPath } from "@/lib/permissions";
+import { permissionForPath, MODULES } from "@/lib/permissions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ShiftStatusBadge } from "@/components/ShiftStatusBadge";
@@ -57,6 +57,28 @@ function PermissionGate() {
   return <Outlet />;
 }
 
+/** Bottom-tab pages: no back button on mobile. */
+const TAB_URLS = ["/pos", "/dashboard", "/inventory", "/sales-history", "/receivables", "/appointments"];
+
+function MobileTitle() {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const mod = [...MODULES].sort((a, b) => b.url.length - a.url.length)
+    .find((m) => pathname === m.url || pathname.startsWith(m.url + "/"));
+  const title = pathname.startsWith("/customers/") ? "Customer" : mod?.label ?? "";
+  const isTab = TAB_URLS.includes(pathname);
+  return (
+    <div className="flex min-w-0 items-center gap-1 md:hidden">
+      {!isTab && (
+        <button type="button" onClick={() => window.history.back()} aria-label="Back"
+          className="-ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-foreground active:bg-muted">
+          <ChevronLeft className="h-5 w-5" />
+        </button>
+      )}
+      {title && <span className="truncate text-base font-semibold">{title}</span>}
+    </div>
+  );
+}
+
 function AuthenticatedLayout() {
   return (
     <AuthProvider>
@@ -67,11 +89,11 @@ function AuthenticatedLayout() {
 
             <header className="sticky top-0 z-20 flex h-14 items-center gap-2 border-b bg-background/80 px-3 sm:px-4 backdrop-blur">
               <SidebarTrigger className="hidden md:flex" />
-              <ShiftStatusBadge />
-              <div className="ml-auto text-xs text-muted-foreground truncate">
-
-                <span className="hidden sm:inline">{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</span>
-                <span className="sm:hidden">{new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>
+              <MobileTitle />
+              <div className="hidden md:block"><ShiftStatusBadge /></div>
+              <div className="ml-auto flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                <div className="md:hidden"><ShiftStatusBadge /></div>
+                <span className="hidden sm:inline truncate">{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</span>
               </div>
             </header>
             <main className="min-w-0 flex-1 overflow-x-clip p-3 pb-[calc(4.5rem+env(safe-area-inset-bottom))] sm:p-6 md:pb-6">

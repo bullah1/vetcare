@@ -237,7 +237,39 @@ function CustomersPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      {/* Phones: one card per customer; tap opens the profile */}
+      <div className="space-y-2 md:hidden">
+        {isFetching && <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p>}
+        {!isFetching && groups.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">No customer found.</p>}
+        {groups.map((g) => {
+          const last = g.sales[0];
+          const body = (
+            <div className="flex items-center gap-3 rounded-xl border bg-card p-3 active:bg-muted/50">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary">
+                {(g.name || "?").trim().charAt(0).toUpperCase()}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="flex items-center gap-1.5 truncate font-medium">{g.name}{hasBiz && g.key !== "walkin" && <BusinessBadge biz={g.business} />}</p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {g.phone ? `${g.phone} · ` : ""}{g.sales.length} bills{last ? ` · ${daysAgo(last.created_at)}d ago` : ""}
+                </p>
+              </div>
+              <div className="shrink-0 text-right">
+                {g.due > 0
+                  ? <p className="text-sm font-semibold text-destructive tabular-nums">{fmt(g.due)}</p>
+                  : <p className="text-xs text-muted-foreground">Clear</p>}
+                <p className="text-[11px] text-muted-foreground tabular-nums">{fmt(g.spent)}</p>
+              </div>
+              {g.key !== "walkin" && <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
+            </div>
+          );
+          return g.key !== "walkin"
+            ? <Link key={g.key} to="/customers/$id" params={{ id: g.key }} className="block">{body}</Link>
+            : <div key={g.key}>{body}</div>;
+        })}
+      </div>
+
+      <Card className="hidden md:block">
         <CardContent className="p-0">
           <Table>
             <TableHeader>

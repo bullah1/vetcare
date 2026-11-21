@@ -420,6 +420,47 @@ function SalesHistoryPage() {
 
 
 
+  // Row actions menu (table on desktop, card on mobile).
+  const rowMenu = (s: SaleRow) => (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button size="icon" variant="ghost" className="h-8 w-8" aria-label={`More actions for ${s.invoice_no}`}>
+            <MoreHorizontal className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-52">
+          <DropdownMenuItem onSelect={() => setDetailId(s.id)}><Receipt className="h-4 w-4" /> View details</DropdownMenuItem>
+          {s.status !== "void" && s.status !== "refunded" && (
+            <DropdownMenuItem onSelect={() => setReturnInvoice(s.invoice_no)}><RotateCcw className="h-4 w-4" /> Return items</DropdownMenuItem>
+          )}
+          {isAdmin && s.status !== "void" && s.status !== "refunded" && canExchange(s.created_at) && (
+            <DropdownMenuItem onSelect={() => setExchangeInvoice(s.invoice_no)}><ArrowLeftRight className="h-4 w-4" /> Exchange products</DropdownMenuItem>
+          )}
+          {s.status !== "void" && (
+            <DropdownMenuItem onSelect={() => setCourierSaleId(s.id)}>
+              <Truck className="h-4 w-4" /> {courierOrders[s.id] ? "Courier status" : "Send via courier"}
+            </DropdownMenuItem>
+          )}
+          {isAdmin && s.status !== "void" && (
+            <>
+              <DropdownMenuSeparator />
+              {isLocked(s.created_at) ? (
+                <DropdownMenuItem disabled><Lock className="h-4 w-4" /> Edit / cancel locked (drawer closed)</DropdownMenuItem>
+              ) : (
+                <>
+                  <DropdownMenuItem onSelect={() => setEditId(s.id)}><Pencil className="h-4 w-4" /> Edit customer / note</DropdownMenuItem>
+                  <DropdownMenuItem className="text-destructive focus:text-destructive"
+                    onSelect={() => { setCancelId(s.id); setCancelReason(""); setCancelRequestId(crypto.randomUUID()); }}>
+                    <Ban className="h-4 w-4" /> Cancel sale
+                  </DropdownMenuItem>
+                </>
+              )}
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+  );
+
   return (
     <div className="p-0 sm:p-2">
       <PageHeader
@@ -509,7 +550,60 @@ function SalesHistoryPage() {
 
 
 
-      <Card>
+      {/* Phones: one card per bill */}
+      <div className="space-y-2 md:hidden">
+        {isFetching && <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p>}
+        {!isFetching && sales.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">No sales found in this range.</p>}
+        {sales.map((s) => (
+          <div key={s.id} role="button" tabIndex={0} onClick={() => setDetailId(s.id)}
+            onKeyDown={(e) => { if (e.key === "Enter") setDetailId(s.id); }}
+            className="rounded-xl border bg-card p-3 active:bg-muted/50">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate font-medium">{s.owner?.full_name ?? "Walk-in"}</p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {s.invoice_no.replace(/^INV-\d{6}-/, "#")} · {format(new Date(s.created_at), "dd MMM, hh:mm a")}
+                </p>
+              </div>
+              <div className="shrink-0 text-right">
+                <p className="text-base font-semibold tabular-nums">{fmt(Number(s.total))}</p>
+                {Number(s.due) > 0 && s.status !== "void" && (
+                  <p className="text-xs font-medium text-destructive tabular-nums">{s.cod ? "COD" : "Due"} {fmt(Number(s.due))}</p>
+                )}
+              </div>
+            </div>
+            <div className="mt-2 flex items-center gap-1.5">
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+                {s.status !== "completed" && (
+                  <Badge variant="secondary" className={`capitalize text-[11px] ${statusColor[s.status] ?? ""}`}>{s.status === "void" ? "cancelled" : s.status.replace("_", " ")}</Badge>
+                )}
+                {(s.payments ?? []).filter((p) => Number(p.amount) > 0).map((p, i) => (
+                  <Badge key={i} variant="secondary" className={`capitalize text-[11px] ${methodColor[p.method] ?? ""}`}>
+                    {p.method === "credit" ? "Store credit" : p.method} {fmt(Number(p.amount))}
+                  </Badge>
+                ))}
+                {exchangedIds.has(s.id) && <Badge variant="outline" className="text-[11px]">Exchanged</Badge>}
+                {courierOrders[s.id] && courierOrders[s.id].status !== "failed" && (
+                  <Badge variant="secondary" className="bg-sky-50 text-[11px] capitalize text-sky-700"><Truck className="h-3 w-3" /> {courierOrders[s.id].status.replace(/_/g, " ")}</Badge>
+                )}
+              </div>
+              <div className="flex shrink-0 items-center" onClick={(e) => e.stopPropagation()}>
+                {Number(s.due) > 0 && s.status !== "void" && (
+                  <Button size="sm" variant="outline" className="h-9 border-emerald-200 text-emerald-700" onClick={() => setDueSaleId(s.id)}>
+                    <Wallet className="h-4 w-4" /> Collect
+                  </Button>
+                )}
+                <Button size="icon" variant="ghost" className="h-9 w-9" onClick={() => reprint(s.id)} disabled={reprintingId === s.id} aria-label="Print invoice">
+                  <Printer className="h-4 w-4" />
+                </Button>
+                {rowMenu(s)}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <Card className="hidden md:block">
         <CardContent className="p-0">
           <Table>
             <TableHeader>
@@ -580,43 +674,7 @@ function SalesHistoryPage() {
                       <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => reprint(s.id)} disabled={reprintingId === s.id} title="Print invoice" aria-label="Print invoice">
                         <Printer className="h-4 w-4" />
                       </Button>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button size="icon" variant="ghost" className="h-8 w-8" aria-label={`More actions for ${s.invoice_no}`}>
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-52">
-                          <DropdownMenuItem onSelect={() => setDetailId(s.id)}><Receipt className="h-4 w-4" /> View details</DropdownMenuItem>
-                          {s.status !== "void" && s.status !== "refunded" && (
-                            <DropdownMenuItem onSelect={() => setReturnInvoice(s.invoice_no)}><RotateCcw className="h-4 w-4" /> Return items</DropdownMenuItem>
-                          )}
-                          {isAdmin && s.status !== "void" && s.status !== "refunded" && canExchange(s.created_at) && (
-                            <DropdownMenuItem onSelect={() => setExchangeInvoice(s.invoice_no)}><ArrowLeftRight className="h-4 w-4" /> Exchange products</DropdownMenuItem>
-                          )}
-                          {s.status !== "void" && (
-                            <DropdownMenuItem onSelect={() => setCourierSaleId(s.id)}>
-                              <Truck className="h-4 w-4" /> {courierOrders[s.id] ? "Courier status" : "Send via courier"}
-                            </DropdownMenuItem>
-                          )}
-                          {isAdmin && s.status !== "void" && (
-                            <>
-                              <DropdownMenuSeparator />
-                              {isLocked(s.created_at) ? (
-                                <DropdownMenuItem disabled><Lock className="h-4 w-4" /> Edit / cancel locked (drawer closed)</DropdownMenuItem>
-                              ) : (
-                                <>
-                                  <DropdownMenuItem onSelect={() => setEditId(s.id)}><Pencil className="h-4 w-4" /> Edit customer / note</DropdownMenuItem>
-                                  <DropdownMenuItem className="text-destructive focus:text-destructive"
-                                    onSelect={() => { setCancelId(s.id); setCancelReason(""); setCancelRequestId(crypto.randomUUID()); }}>
-                                    <Ban className="h-4 w-4" /> Cancel sale
-                                  </DropdownMenuItem>
-                                </>
-                              )}
-                            </>
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                      {rowMenu(s)}
                     </div>
                   </TableCell>
                 </TableRow>

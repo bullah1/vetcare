@@ -303,6 +303,31 @@ function CustomerDetailPage() {
               {sales.length === 0 ? (
                 <div className="p-6 text-sm text-muted-foreground text-center">This customer has no invoices.</div>
               ) : (
+                <>
+                {/* Phones: compact list */}
+                <ul className="divide-y md:hidden">
+                  {sales.slice(0, 50).map((s) => (
+                    <li key={s.id} className="flex items-center gap-3 px-3 py-2.5">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">
+                          {s.invoice_no.replace(/^INV-\d{6}-/, "#")}
+                          {s.status !== "completed" && <span className="ml-1.5 text-[11px] font-normal capitalize text-muted-foreground">{s.status === "void" ? "cancelled" : s.status.replace("_", " ")}</span>}
+                        </p>
+                        <p className="text-xs text-muted-foreground">{format(new Date(s.created_at), "dd MMM yyyy, hh:mm a")}</p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className="text-sm font-semibold tabular-nums">{fmt(Number(s.total))}</p>
+                        {Number(s.due) > 0 && <p className="text-xs text-destructive tabular-nums">Due {fmt(Number(s.due))}</p>}
+                      </div>
+                      {Number(s.due) > 0 && s.status !== "void" && (
+                        <Button size="sm" variant="outline" className="h-9 shrink-0" onClick={() => setDueSale(s)}>
+                          <Wallet className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <div className="hidden md:block">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -343,6 +368,8 @@ function CustomerDetailPage() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
+                </>
               )}
             </CardContent>
           </Card>

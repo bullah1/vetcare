@@ -215,6 +215,32 @@ function CashDrawerPage() {
       <Card>
         <CardHeader><CardTitle>Shift History</CardTitle></CardHeader>
         <CardContent>
+          {/* Phones: one card per shift */}
+          <div className="space-y-2 md:hidden">
+            {!historyQ.data?.length && <p className="py-6 text-center text-sm text-muted-foreground">No shifts yet</p>}
+            {historyQ.data?.map((s: any) => (
+              <div key={s.id} role="button" tabIndex={0} onClick={() => setViewShiftId(s.id)}
+                className={`flex items-center gap-3 rounded-xl border p-3 active:bg-muted/50 ${s.id === effectiveShiftId ? "border-primary/40 bg-primary/5" : ""}`}>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">{format(new Date(s.opened_at), "dd MMM, HH:mm")}{s.closed_at ? ` – ${format(new Date(s.closed_at), "HH:mm")}` : ""}</p>
+                  <p className="text-xs text-muted-foreground tabular-nums">
+                    Expected {s.expected_cash != null ? money(s.expected_cash) : "—"} · Counted {s.counted_cash != null ? money(s.counted_cash) : "—"}
+                  </p>
+                </div>
+                <div className="shrink-0 text-right">
+                  {s.status === "open"
+                    ? <Badge>open</Badge>
+                    : <p className={`text-sm font-semibold tabular-nums ${Number(s.variance) < 0 ? "text-destructive" : Number(s.variance) > 0 ? "text-emerald-600" : "text-muted-foreground"}`}>
+                        {s.variance != null ? money(s.variance) : "—"}
+                      </p>}
+                </div>
+                <Button size="icon" variant="ghost" className="h-9 w-9 shrink-0" aria-label="Print shift" onClick={(e) => { e.stopPropagation(); printShift(s.id); }}>
+                  <Printer className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+          <div className="hidden md:block">
           <Table>
             <TableHeader><TableRow>
               <TableHead>Opened</TableHead><TableHead>Closed</TableHead>
@@ -249,6 +275,7 @@ function CashDrawerPage() {
               {!historyQ.data?.length && <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-6">No shifts yet</TableCell></TableRow>}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
 
@@ -825,8 +852,32 @@ function MethodSummary({ shiftId }: { shiftId: string }) {
   );
   return (
     <Card>
-      <CardHeader><CardTitle className="text-base">Payment Method Summary <span className="text-xs font-normal text-muted-foreground">(click a row for details)</span></CardTitle></CardHeader>
+      <CardHeader><CardTitle className="text-base">Payment Method Summary <span className="text-xs font-normal text-muted-foreground">(tap for details)</span></CardTitle></CardHeader>
       <CardContent>
+        {/* Phones: one card per method */}
+        <div className="space-y-2 md:hidden">
+          {!rows.length && <p className="py-6 text-center text-sm text-muted-foreground">No payments recorded yet</p>}
+          {rows.map((r) => {
+            const inn = Number(r.sales || 0) + Number(r.due_collections || 0) + Number(r.manual_in || 0) + Number(r.cancelled_in || 0);
+            const out = Number(r.refunds || 0) + Number(r.supplier_payments || 0) + Number(r.manual_out || 0) + Number(r.cancelled_out || 0);
+            return (
+              <button key={r.method} type="button" onClick={() => setSelected(r.method)}
+                className="flex w-full items-center gap-3 rounded-xl border p-3 text-left active:bg-muted/50">
+                <Badge className={methodColor[r.method] ?? "bg-muted"}>{methodLabel[r.method] ?? r.method}</Badge>
+                <span className="min-w-0 flex-1 text-xs text-muted-foreground tabular-nums">
+                  <span className="text-emerald-600">+{money(inn)}</span> · <span className="text-destructive">−{money(out)}</span>
+                </span>
+                <span className="shrink-0 font-semibold tabular-nums">{money(r.net)}</span>
+              </button>
+            );
+          })}
+          {rows.length > 0 && (
+            <div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 font-semibold">
+              <span>Total</span><span className="text-primary tabular-nums">{money(totals.net)}</span>
+            </div>
+          )}
+        </div>
+        <div className="hidden md:block">
         <Table>
           <TableHeader><TableRow>
             <TableHead>Method</TableHead>
@@ -871,6 +922,7 @@ function MethodSummary({ shiftId }: { shiftId: string }) {
             )}
           </TableBody>
         </Table>
+        </div>
       </CardContent>
       <MethodTxDialog shiftId={shiftId} method={selected} onClose={() => setSelected(null)} />
     </Card>

@@ -122,10 +122,10 @@ export function MobileBottomNav() {
           <div className="space-y-5 px-4 pb-4">
             {groups.map((g) => (
               <div key={g.label} className="space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <p className="text-xs font-semibold text-muted-foreground">
                   {g.label}
                 </p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-4 gap-x-2 gap-y-3">
                   {g.items.map((m) => {
                     const Icon = ICONS[m.key] ?? Users;
                     const active = isActive(m.url);
@@ -135,14 +135,17 @@ export function MobileBottomNav() {
                         to={m.url}
                         onClick={() => setOpen(false)}
                         className={cn(
-                          "flex flex-col items-center gap-1.5 rounded-2xl border p-3 text-center text-[11px] font-medium",
-                          active
-                            ? "border-primary bg-primary/10 text-primary"
-                            : "border-border bg-card text-foreground",
+                          "flex flex-col items-center gap-1.5 text-center text-[11px] font-medium leading-tight",
+                          active ? "text-primary" : "text-foreground",
                         )}
                       >
-                        <Icon className="h-5 w-5" />
-                        <span className="leading-tight">{m.label}</span>
+                        <span className={cn(
+                          "flex h-12 w-12 items-center justify-center rounded-2xl",
+                          active ? "bg-primary text-primary-foreground" : "bg-primary/10 text-primary",
+                        )}>
+                          <Icon className="h-5 w-5" />
+                        </span>
+                        <span className="line-clamp-2">{m.label}</span>
                       </Link>
                     );
                   })}

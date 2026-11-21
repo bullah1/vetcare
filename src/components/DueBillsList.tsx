@@ -257,7 +257,44 @@ export function DueBillsList() {
             </Tabs>
           </div>
 
-          <div className="-mx-3 overflow-x-auto sm:mx-0">
+          {/* Phones: one card per bill */}
+          <div className="space-y-2 md:hidden">
+            {isFetching && rows.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">Loading...</p>}
+            {!isFetching && rows.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">No bills found.</p>}
+            {rows.map((s) => (
+              <div key={s.id} className="rounded-xl border bg-background p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{s.owner?.full_name ?? "Walk-in"}</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {s.invoice_no.replace(/^INV-\d{6}-/, "#")} · {format(new Date(s.created_at), "dd MMM, hh:mm a")}
+                      {hasSs && business === "all" && <> · {projectLabel(s.project)}</>}
+                    </p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <p className="text-base font-semibold text-destructive tabular-nums">{Number(s.due) > 0.009 ? fmt(s.due) : "—"}</p>
+                    <p className="text-[11px] text-muted-foreground tabular-nums">of {fmt(s.total)}</p>
+                  </div>
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+                    <BillStatusBadge status={billStatus(s)} />
+                    {courierOf(s) && <CourierBadge c={courierOf(s)!} />}
+                  </div>
+                  <Button size="icon" variant="ghost" className="h-9 w-9" aria-label="Print invoice" onClick={() => printInvoice(toReceipt(s))}>
+                    <Printer className="h-4 w-4" />
+                  </Button>
+                  {Number(s.due) > 0.009 && (
+                    <Button size="sm" className="h-9" onClick={() => setCollect(s)}>
+                      <Wallet className="h-4 w-4" /> Collect
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="-mx-3 hidden overflow-x-auto sm:mx-0 md:block">
             <Table>
               <TableHeader>
                 <TableRow>
