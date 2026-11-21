@@ -457,6 +457,8 @@ function POSPage() {
   // Split payment: more methods on the same bill (e.g. part bKash, part cash).
   // The first method uses "Received"; these are the others.
   const [extraPays, setExtraPays] = useState<{ method: PayMethod; amount: number | "" }[]>([]);
+  // Store credit on the customer's account (from a product exchange or a return) pays first.
+  const [useCredit, setUseCredit] = useState(false);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
   const [sheetQ, setSheetQ] = useState("");
@@ -1206,6 +1208,19 @@ function POSPage() {
   const prev = usePreviousDue(ownerId || null, project);
   const otherPrev = usePreviousDue(ownerId || null, project === "ss" ? "pcv" : "ss");
   const prevDue = prev.total;
+  const { data: creditBalance = 0 } = useQuery({
+    queryKey: ["credit-balance", ownerId || null],
+    enabled: !!ownerId,
+    queryFn: async () => {
+      const { data, error } = await (supabase.rpc as any)("customer_credit_balance", { _owner_id: ownerId });
+      if (error) return 0; // older database without store credit
+      return Number(data) || 0;
+    },
+  });
+  useEffect(() => { setUseCredit(false); }, [ownerId]);
+  const creditUse = useCredit && ownerId ? Math.round(Math.min(creditBalance, grandTotal) * 100) / 100 : 0;
+  // What is left to pay after store credit.
+  const payable = Math.round((grandTotal - creditUse) * 100) / 100;
   const resetDelivery = () => {
     setDelOn(false); setDelManId(""); setDelCharge(""); setDelAddress(""); setDelNote("");
     setDelAdding(false); setDelNewName(""); setDelNewPhone("");
@@ -1268,10 +1283,10 @@ function POSPage() {
       }
       // This bill is paid first; anything more clears the customer's older dues
       // (oldest first). Only what is left after that is change.
-      const tender = tenderList(method, paidAmount, extraPays, grandTotal);
-      const split = splitPayments(tender, grandTotal, ownerId ? prevDue : 0);
+      const tender = tenderList(method, paidAmount, extraPays, payable);
+      const split = splitPayments(tender, payable, ownerId ? prevDue : 0);
       const paid = split.billPaid;
-      if (grandTotal - paid > 0.009 && !ownerId) {
+      if (payable - paid > 0.009 && !ownerId) {
         throw new Error("Select a customer for a due sale — the due must be assigned to someone.");
       }
       const items = cart.map((l) => {
@@ -1283,7 +1298,10 @@ function POSPage() {
         items.push({ product_id: null, name: DELIVERY_LINE_NAME, quantity: 1, unit_price: delChargeNum, discount: 0, tax: 0 });
       }
       // One payment per method (split payment = several).
-      const payments = split.bill.map((p) => ({ method: p.method, amount: p.amount, reference: null }));
+      const payments = [
+        ...(creditUse > 0.004 ? [{ method: "credit", amount: creditUse, reference: null }] : []),
+        ...split.bill.map((p) => ({ method: p.method, amount: p.amount, reference: null })),
+      ];
 
       const args = { _owner_id: ownerId || null, _items: items, _payments: payments, _discount: totals.discount, _notes: null };
       const wrong = cart.find((l) => { const p = byId.get(l.product_id); return p && asProject(p.project) !== project; });
@@ -1375,7 +1393,8 @@ function POSPage() {
       setReceipt(r);
       // Send the invoice to the customer's WhatsApp automatically (Cloud API).
       void sendWhatsApp(r, r.sale_id, { auto: true });
-      setCart([]); setDiscount(0); setPaidAmount(""); setExtraPays([]); setOwnerId(""); setResumedBill(null); setCartOpen(false);
+      setCart([]); setDiscount(0); setPaidAmount(""); setExtraPays([]); setOwnerId(""); setResumedBill(null); setCartOpen(false); setUseCredit(false);
+      qc.invalidateQueries({ queryKey: ["credit-balance"] });
       resetDelivery();
       // Stock of what was just sold is lowered here — no need to reload the whole product list.
       const sold = new Map<string, number>();
@@ -1558,11 +1577,11 @@ function POSPage() {
 
   const renderCartBody = (isDesk: boolean) => {
     const owed = ownerId ? prevDue : 0;
-    const sp = splitPayments(tenderList(method, paidAmount, extraPays, grandTotal), grandTotal, owed);
+    const sp = splitPayments(tenderList(method, paidAmount, extraPays, payable), payable, owed);
     const splitOn = method !== "due" && extraPays.length > 0;
     const extraSum = extraPays.reduce((t, e) => t + (Number(e.amount) || 0), 0);
     const paidNow = sp.billPaid;
-    const dueNow = Math.max(0, grandTotal - paidNow);
+    const dueNow = Math.max(0, payable - paidNow);
     const change = method !== "due" && (paidAmount !== "" || splitOn) ? sp.change : 0;
     const billTotal = grandTotal;
     const delId = `del-on-${isDesk ? "d" : "m"}`;
@@ -1835,7 +1854,7 @@ function POSPage() {
               }
               if (e.key === "Escape") { e.preventDefault(); focusSearch(); }
             }}
-            placeholder={method === "due" ? "Not paid now" : Math.max(grandTotal - extraSum, 0).toFixed(2)}
+            placeholder={method === "due" ? "Not paid now" : Math.max(payable - extraSum, 0).toFixed(2)}
             disabled={method === "due"}
           />
         </div>
@@ -1874,7 +1893,7 @@ function POSPage() {
             onClick={() => {
               // Second method gets what is left after the first.
               const first = paidAmount === "" ? 0 : Number(paidAmount);
-              const left = Math.max(Math.round((grandTotal - first - extraSum) * 100) / 100, 0);
+              const left = Math.max(Math.round((payable - first - extraSum) * 100) / 100, 0);
               const used = new Set([method, ...extraPays.map((x) => x.method)]);
               const next = PAY_METHODS.find((m) => !used.has(m)) ?? "cash";
               setExtraPays((list) => [...list, { method: next, amount: paidAmount === "" && list.length === 0 ? "" : left || "" }]);
@@ -1882,6 +1901,15 @@ function POSPage() {
           >
             + Split payment (e.g. part bKash, part cash)
           </button>
+        )}
+        {ownerId && creditBalance > 0.004 && (
+          <label className="flex cursor-pointer items-center justify-between gap-2 rounded-lg border border-emerald-300 bg-emerald-50/70 px-2 py-1.5 text-sm dark:bg-emerald-950/20">
+            <span className="text-emerald-900 dark:text-emerald-200">
+              Use store credit <span className="text-xs">(৳ {creditBalance.toFixed(2)} available)</span>
+              {creditUse > 0 && <span className="block text-xs font-semibold">− ৳ {creditUse.toFixed(2)} · left to pay ৳ {payable.toFixed(2)}</span>}
+            </span>
+            <input type="checkbox" className="h-4 w-4" checked={useCredit} onChange={(e) => { setUseCredit(e.target.checked); setPaidAmount(""); setExtraPays([]); }} />
+          </label>
         )}
         <label className="flex cursor-pointer items-center justify-between gap-2 rounded-lg px-1 text-sm">
           <span className={method === "due" ? "font-medium text-destructive" : "text-muted-foreground"}>Not paid now — keep as due</span>
@@ -1894,8 +1922,8 @@ function POSPage() {
         </label>
         {splitOn && (
           <p className="flex justify-between text-xs text-muted-foreground">
-            <span>{tenderList(method, paidAmount, extraPays, grandTotal).map((p) => `${METHOD_LABELS[p.method as PayMethod] ?? p.method} ৳${p.amount.toFixed(0)}`).join(" + ")}</span>
-            <span className="tabular-nums">= ৳ {tenderList(method, paidAmount, extraPays, grandTotal).reduce((t, p) => t + p.amount, 0).toFixed(2)}</span>
+            <span>{tenderList(method, paidAmount, extraPays, payable).map((p) => `${METHOD_LABELS[p.method as PayMethod] ?? p.method} ৳${p.amount.toFixed(0)}`).join(" + ")}</span>
+            <span className="tabular-nums">= ৳ {tenderList(method, paidAmount, extraPays, payable).reduce((t, p) => t + p.amount, 0).toFixed(2)}</span>
           </p>
         )}
         {owed > 0.009 && (
@@ -1904,14 +1932,14 @@ function POSPage() {
               <span>Previous due — {projectLabel(project)} ({prev.bills.length} bill{prev.bills.length > 1 ? "s" : ""})</span>
               <span className="font-semibold tabular-nums">৳ {owed.toFixed(2)}</span>
             </div>
-            <div className="flex justify-between font-semibold"><span>Total amount</span><span className="tabular-nums">৳ {(grandTotal + owed).toFixed(2)}</span></div>
+            <div className="flex justify-between font-semibold"><span>Total amount</span><span className="tabular-nums">৳ {(payable + owed).toFixed(2)}</span></div>
             {sp.oldPaid > 0.009 && (
               <div className="flex justify-between text-emerald-700"><span>Goes to previous due</span><span className="tabular-nums">৳ {sp.oldPaid.toFixed(2)}</span></div>
             )}
             <div className="flex justify-between text-destructive"><span>Total due after this</span><span className="tabular-nums">৳ {(dueNow + owed - sp.oldPaid).toFixed(2)}</span></div>
             {method !== "due" && (
-              <Button type="button" size="sm" variant="outline" className="h-7 w-full bg-background" onClick={() => setPaidAmount(Math.round((grandTotal + owed) * 100) / 100)}>
-                Pay all ৳ {(grandTotal + owed).toFixed(2)}
+              <Button type="button" size="sm" variant="outline" className="h-7 w-full bg-background" onClick={() => setPaidAmount(Math.round((payable + owed) * 100) / 100)}>
+                Pay all ৳ {(payable + owed).toFixed(2)}
               </Button>
             )}
           </div>

@@ -31,7 +31,7 @@ export function ReturnFlow({ trigger, invoiceNo }: { trigger?: React.ReactNode; 
   const [searched, setSearched] = useState("");
   const [qtyMap, setQtyMap] = useState<Record<string, number>>({});
   const [reason, setReason] = useState("");
-  const [refund, setRefund] = useState<(typeof METHODS)[number] | "none">("cash");
+  const [refund, setRefund] = useState<(typeof METHODS)[number] | "none" | "credit">("cash");
   const [restock, setRestock] = useState(true);
   const [done, setDone] = useState<{ return_no: string; refund_amount: number; refund_paid: number; due_reduction: number } | null>(null);
   const requestId = useRef(crypto.randomUUID());
@@ -65,7 +65,7 @@ export function ReturnFlow({ trigger, invoiceNo }: { trigger?: React.ReactNode; 
     queryFn: async () => {
       const { data, error } = await supabase
         .from("sales")
-        .select("id,invoice_no,total,paid,due,discount,status,created_at, owner:pet_owners(full_name,phone), items:sale_items(id,product_id,name,quantity,unit_price,line_total,returned_quantity), payments(method,amount)")
+        .select("id,invoice_no,total,paid,due,discount,status,created_at,owner_id, owner:pet_owners(full_name,phone), items:sale_items(id,product_id,name,quantity,unit_price,line_total,returned_quantity), payments(method,amount)")
         // Invoice numbers are stored in capitals; the box only LOOKS uppercase,
         // so "inv-…" typed in lower case used to come back "Invoice not found".
         .eq("invoice_no", searched.trim().toUpperCase())
@@ -187,7 +187,7 @@ export function ReturnFlow({ trigger, invoiceNo }: { trigger?: React.ReactNode; 
             <div className="rounded-lg border bg-muted/30 p-4 space-y-2 text-sm">
               <div className="flex justify-between"><span className="text-muted-foreground">Return</span><span className="font-mono font-medium">{done.return_no}</span></div>
               <div className="flex justify-between border-t pt-2"><span className="text-muted-foreground">Refund amount</span><span className="font-semibold tabular-nums">৳ {done.refund_amount.toFixed(2)}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Money paid back</span><span className="tabular-nums">৳ {done.refund_paid.toFixed(2)}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">{refund === "credit" ? "Added to store credit" : "Money paid back"}</span><span className="tabular-nums">৳ {done.refund_paid.toFixed(2)}</span></div>
                <div className="flex justify-between"><span className="text-muted-foreground">Due reduced</span><span className="tabular-nums">৳ {done.due_reduction.toFixed(2)}</span></div>
             </div>
             <div className="flex flex-col-reverse sm:flex-row gap-2">
@@ -265,6 +265,7 @@ export function ReturnFlow({ trigger, invoiceNo }: { trigger?: React.ReactNode; 
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">Adjust unpaid due only</SelectItem>
+                        {sale.owner_id && <SelectItem value="credit">Store credit (customer account)</SelectItem>}
                         {METHODS.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
                       </SelectContent>
                     </Select>

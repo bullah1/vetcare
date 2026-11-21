@@ -59,7 +59,7 @@ export async function loadProductSales(from: string, to: string) {
   const saleCols = `id,invoice_no,created_at,status,subtotal,discount,tax,total,paid,due,cashier_id,owner_id${P ? ",project" : ""}, owner:pet_owners(full_name,phone)`;
   const [sales, periodPays] = await Promise.all([
     fetchAll<SaleRow>(() => db.from("sales").select(saleCols).gte("created_at", fromISO).lte("created_at", toISO).order("created_at").order("id")),
-    fetchAll<PayRow>(() => db.from("payments").select("id,sale_id,method,amount,received_at,return_id").gte("received_at", fromISO).lte("received_at", toISO).order("received_at").order("id")),
+    fetchAll<PayRow>(() => db.from("payments").select("id,sale_id,method,amount,received_at,return_id").neq("method", "credit").gte("received_at", fromISO).lte("received_at", toISO).order("received_at").order("id")),
   ]);
   // Invoices paid in the period but made earlier are needed for the collection report.
   const known = new Set(sales.map((s) => s.id));

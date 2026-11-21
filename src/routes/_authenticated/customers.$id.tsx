@@ -102,6 +102,15 @@ function CustomerDetailPage() {
     queryFn: () => fetchCustomerProfileStats(id, ownerPhone),
   });
 
+  const { data: creditBalance = 0 } = useQuery({
+    queryKey: ["credit-balance", id],
+    queryFn: async () => {
+      const { data, error } = await (supabase.rpc as any)("customer_credit_balance", { _owner_id: id });
+      if (error) return 0;
+      return Number(data) || 0;
+    },
+  });
+
   const qc = useQueryClient();
   const refetchAll = () => {
     refetch();
@@ -167,6 +176,11 @@ function CustomerDetailPage() {
                   <span className="tabular-nums">{fmt(totals.dueBy[p.key] ?? 0)}</span>
                 </div>
               ))}
+            </div>
+          )}
+          {creditBalance > 0.004 && (
+            <div className="mt-1 flex items-center justify-between gap-2 text-xs text-emerald-700">
+              <span>Store credit</span><span className="tabular-nums font-medium">{fmt(creditBalance)}</span>
             </div>
           )}
         </CardContent></Card>

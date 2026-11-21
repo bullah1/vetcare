@@ -2574,6 +2574,7 @@ export type Database = {
         | "card"
         | "bank"
         | "due"
+        | "credit"
       pet_species: "dog" | "cat" | "bird" | "cow" | "goat" | "rabbit" | "other"
       product_category:
         | "pet_food"
@@ -2740,6 +2741,7 @@ export const Constants = {
         "card",
         "bank",
         "due",
+        "credit",
       ],
       pet_species: ["dog", "cat", "bird", "cow", "goat", "rabbit", "other"],
       product_category: [

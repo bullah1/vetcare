@@ -27,7 +27,12 @@ export type MethodCollection = {
 export type CollectionPart = {
   methods: MethodCollection[]; bill_collection: number; prev_due_collection: number; total_collection: number;
   refund_paid: number; net_collection: number;
+  /** Store credit (product exchange). Not money, so not part of collection. */
+  credit_used?: number; credit_issued?: number;
 };
+
+/** Store credit kept on customer accounts in this close (+) or spent from earlier credit (−). */
+export const creditNet = (c: CollectionPart) => num(num(c.credit_issued) - num(c.credit_used));
 export type AccountRow = {
   method: string; opening: number; collection: number; refunds: number; expenses: number; supplier_payments: number;
   manual_in: number; manual_out: number; expected: number; counted?: number; variance?: number; settled?: number;
@@ -138,6 +143,9 @@ export function renderCloseV2Pdf(s: CloseV2, cashier: string): Blob {
   }
   row3("Total Collection", three((k) => B(k).collection.total_collection), true);
   row3("Refund paid (older bills)", three((k) => B(k).collection.refund_paid));
+  if (three((k) => creditNet(B(k).collection)).some((x) => x !== 0)) {
+    row3("Store credit kept (+) / used (-)", three((k) => creditNet(B(k).collection)));
+  }
   y += 3;
 
   header("DUE");
@@ -241,6 +249,7 @@ export function printCloseV2(s: CloseV2, targetWindow?: Window | null) {
       ${methods || row("  —", tkPrint(0))}
       ${row("Total Collection", tkPrint(b.collection.total_collection), "big")}
       ${num(b.collection.refund_paid) ? row("Refund paid (old bills)", tkPrint(-b.collection.refund_paid), "neg") : ""}
+      ${creditNet(b.collection) ? row(creditNet(b.collection) > 0 ? "Store credit kept" : "Store credit used", tkPrint(Math.abs(creditNet(b.collection)))) : ""}
       <div class="st">Due</div>
       ${row("New Due", tkPrint(b.sales.new_due))}
       ${row("Prev. Due Collection", tkPrint(b.collection.prev_due_collection))}

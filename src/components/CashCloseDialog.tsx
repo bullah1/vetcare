@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
-  BIZ, METHOD_LABEL, accIn, accOut, ensureCloseReportV2, loadCloseSummary, num, printCloseV2,
+  BIZ, METHOD_LABEL, accIn, creditNet, accOut, ensureCloseReportV2, loadCloseSummary, num, printCloseV2,
   type BizKey, type CloseV2,
 } from "@/lib/cash-close-v2";
 
@@ -149,6 +149,13 @@ export function CashCloseDialog({ shiftId, onDone }: { shiftId: string; onDone: 
                   ))}
                   <Line label="Total Collection" value={b.collection.total_collection} strong />
                   {num(b.collection.refund_paid) > 0 && <Line label="Refund paid (older bills)" value={b.collection.refund_paid} minus />}
+                  {creditNet(b.collection) !== 0 && (
+                    <Line
+                      label={creditNet(b.collection) > 0 ? "Store credit kept" : "Store credit used"}
+                      value={Math.abs(creditNet(b.collection))}
+                      hint={creditNet(b.collection) > 0 ? "exchange value left on customer accounts — not cash" : "paid with earlier store credit — not cash"}
+                    />
+                  )}
                 </section>
               </div>
 

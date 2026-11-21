@@ -135,7 +135,7 @@ function AccountsPage() {
       const [e, s, p, o, sp] = await Promise.all([
         fetchAll<Expense>(() => supabase.from("expenses").select("*").gte("expense_date", from).lte("expense_date", to).order("expense_date", { ascending: false }).order("created_at", { ascending: false }).order("id")),
         fetchAll<Sale>(() => supabase.from("sales").select("*").gte("created_at", fromISO).lte("created_at", toISO).order("created_at", { ascending: false }).order("id")),
-        fetchAll<Payment>(() => supabase.from("payments").select("*").gte("received_at", fromISO).lte("received_at", toISO).order("id")),
+        fetchAll<Payment>(() => supabase.from("payments").select("*").neq("method", "credit").gte("received_at", fromISO).lte("received_at", toISO).order("id")),
         fetchAll<{ id: string; full_name: string }>(() => supabase.from("pet_owners").select("id,full_name").order("id"), 200000),
         fetchAll<{ id: string; amount: number }>(() => supabase.from("supplier_payments").select("id,amount").gte("paid_at", from).lte("paid_at", to).order("id")),
       ]);

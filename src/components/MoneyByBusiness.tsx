@@ -25,7 +25,7 @@ const total = (c: Cols) => c.cash + c.mobile + c.bank;
 
 export async function loadMoneyByBusiness(fromISO: string, toISO: string, fromDay?: string, toDay?: string) {
   const [payments, expenses] = await Promise.all([
-    fetchAll<any>(() => db.from("payments").select("id,amount,method,received_at,sale_id, sales(project,created_at,status)")
+    fetchAll<any>(() => db.from("payments").select("id,amount,method,received_at,sale_id, sales(project,created_at,status)").neq("method", "credit")
       .gte("received_at", fromISO).lte("received_at", toISO).order("id")),
     // Shift: expenses entered during it. Date range: by expense date.
     fetchAll<any>(() => {

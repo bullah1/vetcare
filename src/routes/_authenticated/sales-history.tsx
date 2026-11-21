@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { History, Receipt, Printer, Search, RotateCcw, Pencil, Wallet, Ban, Truck, Bike, Lock } from "lucide-react";
+import { History, Receipt, Printer, Search, RotateCcw, Pencil, Wallet, Ban, Truck, Bike, Lock, ArrowLeftRight } from "lucide-react";
 import { format } from "date-fns";
 import { PageHeader } from "@/components/PageHeader";
 import { supabase } from "@/integrations/supabase/client";
@@ -21,6 +21,7 @@ import ThermalPrinterSettings from "@/components/ThermalPrinterSettings";
 import { SaleEditDialog, type EditableSale } from "@/components/SaleEditDialog";
 import { CollectDueDialog } from "@/components/CollectDueDialog";
 import { ReturnFlow } from "@/components/ReturnFlow";
+import { ExchangeFlow, canExchange } from "@/components/ExchangeFlow";
 import { CourierDialog, courierStatusColor } from "@/components/CourierDialog";
 import { fetchAll, fetchAllIn } from "@/lib/fetch-all";
 import { grossOf, reversalAmount, dayRangeISO, VALID_STATUSES, deadSaleIds, monthStartDhaka, todayDhaka } from "@/lib/sales-ledger";
@@ -46,6 +47,7 @@ type SaleRow = {
   status: string;
   owner: { full_name: string; phone: string | null } | null;
   payments: { method: string; amount: number; received_at: string }[];
+  exchange_of_sale_id?: string | null;
 };
 
 type RangePayment = {
@@ -166,7 +168,7 @@ function SalesHistoryPage() {
       const rows = await fetchAll<SaleRow>(() => {
         let query = supabase
           .from("sales")
-          .select("id,invoice_no,created_at,total,paid,due,status, owner:pet_owners(full_name,phone), payments(method,amount,received_at)")
+          .select("id,invoice_no,created_at,total,paid,due,status,exchange_of_sale_id, owner:pet_owners(full_name,phone), payments(method,amount,received_at)")
           .gte("created_at", fromISO)
           .lte("created_at", toISO)
           .order("created_at", { ascending: false });
@@ -189,6 +191,7 @@ function SalesHistoryPage() {
         supabase
           .from("payments")
           .select(bizOn ? "id,sale_id,method,amount,received_at, sales(project)" : "id,sale_id,method,amount,received_at")
+          .neq("method", "credit") // store credit moves value between bills, it is not money received
           .gte("received_at", fromISO)
           .lte("received_at", toISO)
           .order("received_at", { ascending: false }) as any,
@@ -224,11 +227,16 @@ function SalesHistoryPage() {
     queryFn: async () => {
       // Chunked: a month of invoice ids in one URL is too long and the request
       // failed, which made valid invoices look "dead" and dropped them.
-      return fetchAllIn<{ sale_id: string }>(allSales.map((s) => s.id), (c) =>
-        supabase.from("sale_returns").select("sale_id").in("sale_id", c).order("id") as any,
+      return fetchAllIn<{ sale_id: string; exchange_sale_id?: string | null }>(allSales.map((s) => s.id), (c) =>
+        (supabase as any).from("sale_returns").select("sale_id,exchange_sale_id").in("sale_id", c).order("id"),
       );
     },
   });
+
+  const exchangedIds = useMemo(
+    () => new Set(reversalRows.filter((r) => r.exchange_sale_id).map((r) => r.sale_id)),
+    [reversalRows],
+  );
 
   const { data: courierOrders = {}, refetch: refetchCouriers } = useQuery({
     queryKey: ["sales-courier-orders", allSales.map((s) => s.id).join(",")],
@@ -552,12 +560,23 @@ function SalesHistoryPage() {
                           />
                         </span>
                       )}
+                      {isAdmin && s.status !== "void" && s.status !== "refunded" && canExchange(s.created_at) && (
+                        <span onClick={(e) => e.stopPropagation()}>
+                          <ExchangeFlow
+                            invoiceNo={s.invoice_no}
+                            onPrint={(id) => reprint(id)}
+                            trigger={<Button size="sm" variant="ghost" title="Exchange products"><ArrowLeftRight className="h-4 w-4" /></Button>}
+                          />
+                        </span>
+                      )}
                       {(s.payments ?? []).length === 0 && Number(s.due) <= 0 && <span className="text-xs text-muted-foreground">—</span>}
                     </div>
                   </TableCell>
                   <TableCell>
 
                     <Badge variant="secondary" className={statusColor[s.status] ?? ""}>{s.status.replace("_", " ")}</Badge>
+                    {exchangedIds.has(s.id) && <Badge variant="outline" className="ml-1 text-[11px]">Exchanged</Badge>}
+                    {s.exchange_of_sale_id && <Badge variant="outline" className="ml-1 text-[11px]">Exchange bill</Badge>}
                   </TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>
                     <div className="flex gap-1 justify-end">
