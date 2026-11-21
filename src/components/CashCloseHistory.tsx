@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ensureCloseReport, reportBlob, reportSignedUrl, type CloseReportRow } from "@/lib/cash-close-report";
+import { ensureCloseReportV2, loadFrozenSummary } from "@/lib/cash-close-v2";
 
 const tk = (v: number) => `৳${Number(v || 0).toLocaleString("en-BD", { maximumFractionDigits: 2 })}`;
 const when = (iso: string) =>
@@ -55,10 +56,18 @@ export function CashCloseHistory() {
     } catch (e: any) { if (e?.name !== "AbortError") toast.error(e.message); }
   };
   const generate = async (shiftId: string) => {
-    const { data, error } = await supabase.rpc("cash_shift_summary", { _shift_id: shiftId });
-    if (error) return toast.error(error.message);
-    try { await ensureCloseReport(data as any); toast.success("Report saved"); qc.invalidateQueries({ queryKey: ["cash_close_reports"] }); }
-    catch (e: any) { toast.error(e.message); }
+    try {
+      // Shifts closed with the new Cash Close keep a frozen summary: use it as-is.
+      const frozen = await loadFrozenSummary(shiftId);
+      if (frozen) await ensureCloseReportV2(frozen);
+      else {
+        const { data, error } = await supabase.rpc("cash_shift_summary", { _shift_id: shiftId });
+        if (error) throw error;
+        await ensureCloseReport(data as any);
+      }
+      toast.success("Report saved");
+      qc.invalidateQueries({ queryKey: ["cash_close_reports"] });
+    } catch (e: any) { toast.error(e.message); }
   };
 
   return (
