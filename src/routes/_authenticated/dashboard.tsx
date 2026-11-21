@@ -100,8 +100,9 @@ function Dashboard() {
   const rangeStartDate = monthDate < start30Date ? monthDate : start30Date;
   const { fromISO: rangeStartISO, toISO: rangeEndISO } = dayRangeISO(rangeStartDate, todayDate);
 
-  const { data: stats, dataUpdatedAt } = useQuery({
+  const { data: stats, dataUpdatedAt, error: statsError, isFetching: statsFetching, refetch: refetchStats } = useQuery({
     queryKey: ["dashboard-stats-v3", todayDate],
+    retry: 1,
     refetchInterval: 30000,
     queryFn: async () => {
       const [
@@ -180,10 +181,12 @@ function Dashboard() {
       const yestOrders = byDay[yKey]?.orders ?? 0;
       // Month figures from the same engine as the Business Report.
       const monthTotal = period.daily.filter((r) => r.day >= monthDate).reduce((t, r) => t + r.net, 0);
-      const lastMonth = computePeriod(await loadPeriod({ from: lastMonthDate, to: lastMonthEnd }));
-      const lastMonthTotal = lastMonth.sales.netSales;
+      // Last month is only a comparison: if it fails, today's numbers still show.
+      const lastMonth = await loadPeriod({ from: lastMonthDate, to: lastMonthEnd }).then(computePeriod)
+        .catch((e) => { console.error("[dashboard] last month failed", e); return null; });
+      const lastMonthTotal = lastMonth?.sales.netSales ?? 0;
       const monthExp = (expenses30.data ?? []).filter((e: any) => e.expense_date >= monthDate && !isPurchaseExpense(e)).reduce((s: number, e: any) => s + Number(e.amount), 0);
-      const lastMonthExpense = lastMonth.opex;
+      const lastMonthExpense = lastMonth?.opex ?? 0;
 
       // Top customers (30d)
       const custTally: Record<string, { name: string; total: number; orders: number }> = {};
@@ -393,6 +396,16 @@ function Dashboard() {
 
   return (
     <div className="min-w-0 space-y-4 sm:space-y-5">
+      {statsError && !stats && (
+        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          <span className="min-w-0 flex-1">
+            Dashboard numbers could not load: <span className="font-mono text-xs">{(statsError as Error).message}</span>
+          </span>
+          <button type="button" className="rounded-md border border-destructive/40 px-3 py-1.5 font-medium" onClick={() => refetchStats()} disabled={statsFetching}>
+            {statsFetching ? "Loading…" : "Try again"}
+          </button>
+        </div>
+      )}
       {/* Header */}
       <header className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
