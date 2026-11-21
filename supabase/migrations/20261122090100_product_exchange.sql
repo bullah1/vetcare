@@ -11,8 +11,8 @@
 -- Store credit balance of a customer = -(sum of all 'credit' payments on their bills).
 -- Only admins can exchange, and only bills from the last 15 days.
 
-ALTER TABLE public.sales ADD COLUMN IF NOT EXISTS exchange_of_sale_id uuid REFERENCES public.sales(id);
-ALTER TABLE public.sale_returns ADD COLUMN IF NOT EXISTS exchange_sale_id uuid REFERENCES public.sales(id);
+ALTER TABLE public.sales ADD COLUMN IF NOT EXISTS exchange_of_sale_id uuid;  -- no FK: a 2nd FK to sales breaks PostgREST embeds
+ALTER TABLE public.sale_returns ADD COLUMN IF NOT EXISTS exchange_sale_id uuid;  -- no FK: a 2nd FK to sales breaks PostgREST embeds
 CREATE INDEX IF NOT EXISTS ix_sales_exchange_of ON public.sales(exchange_of_sale_id) WHERE exchange_of_sale_id IS NOT NULL;
 
 -- Store credit available to a customer.
