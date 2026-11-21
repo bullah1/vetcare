@@ -1,21 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { StopCircle } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   BIZ, METHOD_LABEL, accIn, creditNet, accOut, ensureCloseReportV2, loadCloseSummary, num, printCloseV2,
   type BizKey, type CloseV2,
 } from "@/lib/cash-close-v2";
 
 const money = (n: number) => `৳${num(n).toLocaleString("en-BD", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const tone = (v: number) => (v < 0 ? "text-destructive" : v > 0 ? "text-emerald-600" : "");
 
 function Line({ label, value, strong, minus, hint }: { label: string; value: number; strong?: boolean; minus?: boolean; hint?: string }) {
   return (
@@ -31,12 +28,12 @@ function Line({ label, value, strong, minus, hint }: { label: string; value: num
   );
 }
 
-/** Cash Close for the shared drawer: Part A Sales, Part B Collection, Part C Account closing. */
+/** Cash Close for the shared drawer. Only cash is counted by hand; digital accounts close at their expected amount. */
 export function CashCloseDialog({ shiftId, onDone }: { shiftId: string; onDone: () => void }) {
   const [open, setOpen] = useState(false);
   const [biz, setBiz] = useState<BizKey>("all");
-  const [counted, setCounted] = useState<Record<string, string>>({});
-  const [settle, setSettle] = useState(true);
+  const [counted, setCounted] = useState("");
+  const [pending, setPending] = useState("");
   const [notes, setNotes] = useState("");
 
   const q = useQuery({
@@ -47,29 +44,20 @@ export function CashCloseDialog({ shiftId, onDone }: { shiftId: string; onDone: 
   });
   const s = q.data;
 
-  // Prefill counted with expected once, so only differences need typing.
-  useEffect(() => {
-    if (!s) return;
-    setCounted((prev) => {
-      const next = { ...prev };
-      for (const a of s.accounts) if (next[a.method] === undefined) next[a.method] = String(num(a.expected));
-      return next;
-    });
-  }, [s]);
-
-  const rows = useMemo(() => (s?.accounts ?? []).map((a) => {
-    const cnt = counted[a.method] === undefined || counted[a.method] === "" ? num(a.expected) : Number(counted[a.method]) || 0;
-    return { a, cnt, v: num(cnt - num(a.expected)) };
-  }), [s, counted]);
-  const tot = rows.reduce((t, r) => ({ e: t.e + num(r.a.expected), c: t.c + r.cnt, v: t.v + r.v }), { e: 0, c: 0, v: 0 });
+  const cash = s?.accounts.find((a) => a.method === "cash");
+  const digital = (s?.accounts ?? []).filter((a) => a.method !== "cash" && (num(a.expected) !== 0 || accIn(a) !== 0 || accOut(a) !== 0));
+  const expected = num(cash?.expected);
+  const countedNum = counted === "" ? null : Number(counted) || 0;
+  const pendingNum = Math.max(0, Number(pending) || 0);
+  const variance = countedNum === null ? null : num(countedNum - expected);
+  const varianceAfter = variance === null ? null : num(variance + pendingNum);
 
   const mut = useMutation({
     mutationFn: async () => {
+      if (countedNum === null) throw new Error("Count the cash in the drawer and enter it first");
       const w = window.open("", "_blank", "width=480,height=900"); // opened inside the click: not pop-up blocked
-      const payload: Record<string, number> = {};
-      for (const r of rows) payload[r.a.method] = r.cnt;
       const { data, error } = await (supabase.rpc as any)("close_cash_shift_v2", {
-        _shift_id: shiftId, _counted: payload, _settle: settle, _notes: notes.trim() || null,
+        _shift_id: shiftId, _counted: { cash: countedNum, pending_expense: pendingNum }, _settle: true, _notes: notes.trim() || null,
       });
       if (error) { w?.close(); throw error; }
       const frozen = (data as any).close_summary as CloseV2;
@@ -90,159 +78,165 @@ export function CashCloseDialog({ shiftId, onDone }: { shiftId: string; onDone: 
 
   if (!open) {
     return (
-      <Button variant="destructive" onClick={() => { setOpen(true); setCounted({}); setNotes(""); setBiz("all"); }}>
+      <Button variant="destructive" onClick={() => { setOpen(true); setCounted(""); setPending(""); setNotes(""); setBiz("all"); }}>
         <StopCircle className="mr-2 h-4 w-4" />Close Shift
       </Button>
     );
   }
 
   const b = s?.business[biz];
+  const methods = (b?.collection.methods ?? []).filter((m) => num(m.collection) !== 0);
+  const verdict = (v: number | null) =>
+    v === null ? "Enter counted cash" : Math.abs(v) < 0.01 ? "Matched" : v < 0 ? `Short ${money(-v)}` : `Excess ${money(v)}`;
+  const verdictTone = (v: number | null) =>
+    v === null ? "text-muted-foreground" : Math.abs(v) < 0.01 ? "text-emerald-700" : v < 0 ? "text-destructive" : "text-amber-600";
+
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-2 sm:p-6" role="dialog" aria-modal="true">
-      <Card className="mx-auto w-full max-w-3xl">
-        <CardHeader className="pb-3">
-          <CardTitle>Cash Close</CardTitle>
-          {s && (
-            <p className="text-xs text-muted-foreground">
-              Opened {new Date(s.opened_at).toLocaleString("en-GB", { timeZone: "Asia/Dhaka" })} · all figures are from this drawer shift only
-            </p>
-          )}
-        </CardHeader>
-        <CardContent className="space-y-5">
+    <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/40 p-0 sm:items-center sm:p-6" role="dialog" aria-modal="true" aria-labelledby="cc-title">
+      <div className="flex max-h-full w-full max-w-2xl flex-col overflow-hidden bg-background shadow-xl sm:max-h-[92vh] sm:rounded-xl">
+        <header className="border-b px-4 py-3 sm:px-5">
+          <div className="flex items-center justify-between gap-3">
+            <h2 id="cc-title" className="text-lg font-semibold">Cash Close</h2>
+            {s && (
+              <span className="text-xs text-muted-foreground">
+                Opened {new Date(s.opened_at).toLocaleString("en-GB", { timeZone: "Asia/Dhaka", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+          </div>
+        </header>
+
+        <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-5">
           {q.isLoading && <p className="text-sm text-muted-foreground">Calculating…</p>}
           {q.error && <p className="text-sm text-destructive">{(q.error as Error).message}</p>}
 
-          {s && b && (
+          {s && b && cash && (
             <>
-              <div className="inline-flex rounded-md border p-0.5" role="tablist" aria-label="Business">
-                {BIZ.map((x) => (
-                  <button
-                    key={x.key}
-                    role="tab"
-                    aria-selected={biz === x.key}
-                    onClick={() => setBiz(x.key)}
-                    className={`rounded px-3 py-1.5 text-sm ${biz === x.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
-                  >
-                    {x.label}
-                  </button>
-                ))}
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <section className="rounded-md border p-3">
-                  <h3 className="mb-1 text-sm font-semibold">A · Sales Summary</h3>
-                  <Line label="Total Sales" value={b.sales.total_sales} hint={`${b.sales.bills} bills`} />
-                  <Line label="Total Discount" value={b.sales.discount} minus />
-                  <Line label="Total Refund" value={b.sales.refund} minus />
-                  <Line label="Net Sales" value={b.sales.net_sales} strong />
-                  {b.sales.cancelled_bills > 0 && (
-                    <p className="pt-1 text-xs text-muted-foreground">
-                      {b.sales.cancelled_bills} bill(s) cancelled in this shift ({money(b.sales.cancelled_bills_amount)}) — not counted.
-                    </p>
-                  )}
-                </section>
-
-                <section className="rounded-md border p-3">
-                  <h3 className="mb-1 text-sm font-semibold">B · Collection Summary</h3>
-                  {b.collection.methods.map((m) => (
-                    <Line key={m.method} label={`${METHOD_LABEL[m.method] ?? m.method} Collection`} value={m.collection} />
-                  ))}
-                  <Line label="Total Collection" value={b.collection.total_collection} strong />
-                  {num(b.collection.refund_paid) > 0 && <Line label="Refund paid (older bills)" value={b.collection.refund_paid} minus />}
-                  {creditNet(b.collection) !== 0 && (
-                    <Line
-                      label={creditNet(b.collection) > 0 ? "Store credit kept" : "Store credit used"}
-                      value={Math.abs(creditNet(b.collection))}
-                      hint={creditNet(b.collection) > 0 ? "exchange value left on customer accounts — not cash" : "paid with earlier store credit — not cash"}
-                    />
-                  )}
-                </section>
-              </div>
-
-              <section className="rounded-md border bg-muted/30 p-3">
-                <h3 className="mb-1 text-sm font-semibold">Due</h3>
-                <div className="grid gap-x-6 sm:grid-cols-2">
-                  <Line label="New Due" value={b.sales.new_due} hint="left unpaid on this shift's bills" />
-                  <Line label="Previous Due Collection" value={b.collection.prev_due_collection} hint="paid now for older bills" />
+              {/* Cash drawer — the only thing counted by hand */}
+              <section className="rounded-lg border-2 border-primary/30 bg-primary/5 p-4" aria-labelledby="cc-cash">
+                <div className="flex flex-wrap items-end justify-between gap-2">
+                  <div>
+                    <h3 id="cc-cash" className="text-sm font-medium text-muted-foreground">Cash that should be in the drawer</h3>
+                    <p className="text-3xl font-bold tabular-nums">{money(expected)}</p>
+                  </div>
+                  <div className="text-right text-xs leading-5 text-muted-foreground tabular-nums">
+                    <div>Opening {money(cash.opening)}</div>
+                    <div className="text-emerald-700">+ Cash in {money(accIn(cash))}</div>
+                    <div className="text-destructive">− Cash out {money(accOut(cash))}</div>
+                  </div>
                 </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label htmlFor="cc-counted">Counted cash</Label>
+                    <Input id="cc-counted" type="number" inputMode="decimal" autoFocus placeholder="0"
+                      className="h-12 bg-background text-right text-xl font-semibold tabular-nums"
+                      value={counted} onChange={(e) => setCounted(e.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="cc-pending">Expense not yet entered</Label>
+                    <Input id="cc-pending" type="number" inputMode="decimal" min={0} placeholder="0"
+                      className="h-12 bg-background text-right text-xl tabular-nums"
+                      value={pending} onChange={(e) => setPending(e.target.value)} />
+                    <p className="text-xs text-muted-foreground">Only for this count and the print — no expense is saved.</p>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-baseline justify-between gap-2 border-t border-primary/20 pt-3">
+                  <span className="text-sm font-medium">Difference</span>
+                  <span className={`text-xl font-bold tabular-nums ${verdictTone(variance)}`}>{verdict(variance)}</span>
+                </div>
+                {pendingNum > 0 && variance !== null && (
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <span className="text-sm text-muted-foreground">After the {money(pendingNum)} expense</span>
+                    <span className={`text-base font-semibold tabular-nums ${verdictTone(varianceAfter)}`}>{verdict(varianceAfter)}</span>
+                  </div>
+                )}
               </section>
 
-              <section className="space-y-2">
-                <h3 className="text-sm font-semibold">C · Account Closing <span className="font-normal text-muted-foreground">(all businesses together)</span></h3>
-                <div className="overflow-x-auto rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Account</TableHead>
-                        <TableHead className="text-right">Opening</TableHead>
-                        <TableHead className="text-right">In</TableHead>
-                        <TableHead className="text-right">Out</TableHead>
-                        <TableHead className="text-right">Expected</TableHead>
-                        <TableHead className="w-32 text-right">Counted</TableHead>
-                        <TableHead className="text-right">Variance</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {rows.map(({ a, v }) => (
-                        <TableRow key={a.method}>
-                          <TableCell className="whitespace-nowrap">{METHOD_LABEL[a.method] ?? a.method}</TableCell>
-                          <TableCell className="text-right tabular-nums">{money(a.opening)}</TableCell>
-                          <TableCell className="text-right tabular-nums text-emerald-700">{money(accIn(a))}</TableCell>
-                          <TableCell className="text-right tabular-nums text-destructive">{money(accOut(a))}</TableCell>
-                          <TableCell className="text-right font-medium tabular-nums">{money(a.expected)}</TableCell>
-                          <TableCell className="text-right">
-                            <Input
-                              type="number"
-                              inputMode="decimal"
-                              aria-label={`Counted ${METHOD_LABEL[a.method] ?? a.method}`}
-                              className="h-9 text-right"
-                              value={counted[a.method] ?? ""}
-                              onChange={(e) => setCounted((p) => ({ ...p, [a.method]: e.target.value }))}
-                            />
-                          </TableCell>
-                          <TableCell className={`text-right font-medium tabular-nums ${tone(v)}`}>
-                            {money(v)}{v < 0 ? " short" : v > 0 ? " excess" : ""}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                      <TableRow className="bg-muted/60 font-semibold">
-                        <TableCell colSpan={4}>Total</TableCell>
-                        <TableCell className="text-right tabular-nums">{money(tot.e)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{money(tot.c)}</TableCell>
-                        <TableCell className={`text-right tabular-nums ${tone(tot.v)}`}>{money(tot.v)}</TableCell>
-                      </TableRow>
-                    </TableBody>
-                  </Table>
-                </div>
-                <div className="grid gap-x-6 text-sm sm:grid-cols-3">
-                  <Line label="Cash expenses" value={s.expenses.cash} />
-                  <Line label="All expenses" value={s.expenses.total} />
-                  <Line label="Supplier payments" value={s.expenses.supplier_payments} />
-                </div>
-                <label className="flex items-start gap-2 rounded-md border bg-muted/40 p-3 text-sm">
-                  <input type="checkbox" className="mt-0.5 h-4 w-4" checked={settle} onChange={(e) => setSettle(e.target.checked)} />
-                  <span>
-                    Digital Account Settlement — close out bKash, Nagad, Rocket, Bank and Card at their counted amounts
-                    <span className="block text-xs text-muted-foreground">Next shift then starts these accounts from zero.</span>
-                  </span>
-                </label>
+              {/* Digital accounts — fixed, closed at the software amount */}
+              <section aria-labelledby="cc-digital">
+                <h3 id="cc-digital" className="mb-1.5 text-sm font-semibold">Digital accounts</h3>
+                {digital.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No bKash, Nagad, Rocket, Bank or Card money in this shift.</p>
+                ) : (
+                  <ul className="divide-y rounded-lg border">
+                    {digital.map((a) => (
+                      <li key={a.method} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                        <span>{METHOD_LABEL[a.method] ?? a.method}</span>
+                        <span className="font-medium tabular-nums">{money(a.expected)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="mt-1 text-xs text-muted-foreground">These close at the amounts shown and start from zero next shift.</p>
               </section>
 
-              <div>
-                <Label htmlFor="close-notes">Closing Notes</Label>
+              {/* Sales and collection, per business */}
+              <section aria-labelledby="cc-sales" className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 id="cc-sales" className="text-sm font-semibold">Sales and collection</h3>
+                  <div className="inline-flex rounded-md border p-0.5" role="tablist" aria-label="Business">
+                    {BIZ.map((x) => (
+                      <button key={x.key} role="tab" aria-selected={biz === x.key} onClick={() => setBiz(x.key)}
+                        className={`rounded px-2.5 py-1 text-xs ${biz === x.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+                        {x.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-lg border p-3">
+                    <p className="text-xs text-muted-foreground">Net sales · {b.sales.bills} bills</p>
+                    <p className="text-2xl font-semibold tabular-nums">{money(b.sales.net_sales)}</p>
+                    <div className="mt-2 border-t pt-1">
+                      <Line label="Total sales" value={b.sales.total_sales} />
+                      <Line label="Discount" value={b.sales.discount} minus />
+                      <Line label="Refund" value={b.sales.refund} minus />
+                    </div>
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <p className="text-xs text-muted-foreground">Total collection</p>
+                    <p className="text-2xl font-semibold tabular-nums">{money(b.collection.total_collection)}</p>
+                    <div className="mt-2 border-t pt-1">
+                      {methods.length === 0 && <p className="py-1 text-sm text-muted-foreground">No collection yet</p>}
+                      {methods.map((m) => <Line key={m.method} label={METHOD_LABEL[m.method] ?? m.method} value={m.collection} />)}
+                      {num(b.collection.refund_paid) > 0 && <Line label="Refund paid (older bills)" value={b.collection.refund_paid} minus />}
+                      {creditNet(b.collection) !== 0 && (
+                        <Line label={creditNet(b.collection) > 0 ? "Store credit kept" : "Store credit used"} value={Math.abs(creditNet(b.collection))} hint="not cash" />
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="grid gap-x-6 rounded-lg border bg-muted/30 px-3 py-1 sm:grid-cols-2">
+                  <Line label="New due" value={b.sales.new_due} />
+                  <Line label="Previous due collected" value={b.collection.prev_due_collection} />
+                </div>
+                {b.sales.cancelled_bills > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {b.sales.cancelled_bills} bill(s) cancelled in this shift ({money(b.sales.cancelled_bills_amount)}) — not counted.
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Expenses entered this shift: cash {money(s.expenses.cash)} · all {money(s.expenses.total)}
+                  {num(s.expenses.supplier_payments) ? ` · supplier ${money(s.expenses.supplier_payments)}` : ""}
+                </p>
+              </section>
+
+              <div className="space-y-1">
+                <Label htmlFor="close-notes">Closing notes</Label>
                 <Textarea id="close-notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} />
               </div>
             </>
           )}
+        </div>
 
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button variant="destructive" onClick={() => mut.mutate()} disabled={!s || mut.isPending}>
-              {mut.isPending ? "Closing…" : "Close & Print"}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+        <footer className="flex items-center justify-end gap-2 border-t bg-background px-4 py-3 sm:px-5">
+          <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+          <Button variant="destructive" onClick={() => mut.mutate()} disabled={!s || countedNum === null || mut.isPending}>
+            {mut.isPending ? "Closing…" : "Close & Print"}
+          </Button>
+        </footer>
+      </div>
     </div>
   );
 }

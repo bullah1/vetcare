@@ -36,6 +36,8 @@ export const creditNet = (c: CollectionPart) => num(num(c.credit_issued) - num(c
 export type AccountRow = {
   method: string; opening: number; collection: number; refunds: number; expenses: number; supplier_payments: number;
   manual_in: number; manual_out: number; expected: number; counted?: number; variance?: number; settled?: number;
+  /** cash only: spending not yet entered as an expense (shown, not booked) */
+  pending_expense?: number; variance_after_pending?: number;
 };
 export type CloseV2 = {
   version: 2;
@@ -45,6 +47,7 @@ export type CloseV2 = {
   expenses: { total: number; cash: number; supplier_payments: number };
   totals?: { expected: number; counted: number; variance: number; settled: number };
   notes?: string | null;
+  pending_expense?: number;
   generated_at: string;
 };
 
@@ -186,6 +189,12 @@ export function renderCloseV2Pdf(s: CloseV2, cashier: string): Blob {
     ["Supplier payments", s.expenses.supplier_payments],
     ["Digital account settlement", s.totals?.settled ?? 0],
   ];
+  const pend = num(s.pending_expense);
+  if (pend) {
+    const cashRow = s.accounts.find((a) => a.method === "cash");
+    extra.push(["Expense not yet entered (info only)", pend]);
+    extra.push(["Cash variance after that expense", num(cashRow?.variance_after_pending ?? 0)]);
+  }
   for (const [k, v] of extra) { doc.text(k, L + 2, y); doc.text(tkPdf(v), R, y, { align: "right" }); y += 5; }
 
   if (s.notes) {
@@ -288,6 +297,8 @@ export function printCloseV2(s: CloseV2, targetWindow?: Window | null) {
     ${row("All expenses", tkPrint(s.expenses.total))}
     ${num(s.expenses.supplier_payments) ? row("Supplier payments", tkPrint(s.expenses.supplier_payments)) : ""}
     ${row("Digital settlement", tkPrint(s.totals?.settled ?? 0))}
+    ${num(s.pending_expense) ? row("Expense not entered (info)", tkPrint(s.pending_expense!)) : ""}
+    ${num(s.pending_expense) ? row("Cash var. after it", tkPrint(s.accounts.find((a) => a.method === "cash")?.variance_after_pending ?? 0), "big") : ""}
   </div>
   ${s.notes ? `<div class="dash"></div><div class="muted">${esc(s.notes)}</div>` : ""}
   <div class="sign"><div>Cashier</div><div>Manager</div></div>
