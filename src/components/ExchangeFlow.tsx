@@ -40,11 +40,15 @@ type Done = {
  * Items back are restocked; their value pays for the new bill; only the difference
  * changes hands (or is kept as store credit on the customer's account).
  */
-export function ExchangeFlow({ invoiceNo, trigger, onPrint }: {
-  invoiceNo: string; trigger: React.ReactNode; onPrint?: (saleId: string) => void;
+export function ExchangeFlow({ invoiceNo, trigger, onPrint, open: openProp, onOpenChange }: {
+  invoiceNo: string; trigger?: React.ReactNode; onPrint?: (saleId: string) => void;
+  open?: boolean; onOpenChange?: (open: boolean) => void;
 }) {
   const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
+  const [innerOpen, setInnerOpen] = useState(false);
+  const controlled = openProp !== undefined;
+  const open = controlled ? !!openProp : innerOpen;
+  const setOpen = (v: boolean) => { if (!controlled) setInnerOpen(v); onOpenChange?.(v); };
   const [backQty, setBackQty] = useState<Record<string, number>>({});
   const [lines, setLines] = useState<NewLine[]>([]);
   const [project, setProject] = useState<Project>("pcv");
@@ -204,7 +208,7 @@ export function ExchangeFlow({ invoiceNo, trigger, onPrint }: {
 
   return (
     <Sheet open={open} onOpenChange={(v) => { setOpen(v); if (!v) reset(); }}>
-      <SheetTrigger asChild>{trigger}</SheetTrigger>
+      {trigger && <SheetTrigger asChild>{trigger}</SheetTrigger>}
       <SheetContent side="bottom" className="max-h-[92vh] overflow-auto rounded-t-2xl p-4 sm:mx-auto sm:max-w-2xl sm:p-6">
         <SheetHeader className="mb-3 text-left">
           <SheetTitle className="flex items-center gap-2"><ArrowLeftRight className="h-4 w-4" /> Exchange products</SheetTitle>

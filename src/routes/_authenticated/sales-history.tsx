@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { History, Receipt, Printer, Search, RotateCcw, Pencil, Wallet, Ban, Truck, Bike, Lock, ArrowLeftRight } from "lucide-react";
+import { History, Receipt, Printer, Search, RotateCcw, Pencil, Wallet, Ban, Truck, Bike, Lock, ArrowLeftRight, MoreHorizontal } from "lucide-react";
 import { format } from "date-fns";
 import { PageHeader } from "@/components/PageHeader";
 import { supabase } from "@/integrations/supabase/client";
@@ -22,6 +22,7 @@ import { SaleEditDialog, type EditableSale } from "@/components/SaleEditDialog";
 import { CollectDueDialog } from "@/components/CollectDueDialog";
 import { ReturnFlow } from "@/components/ReturnFlow";
 import { ExchangeFlow, canExchange } from "@/components/ExchangeFlow";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { CourierDialog, courierStatusColor } from "@/components/CourierDialog";
 import { fetchAll, fetchAllIn } from "@/lib/fetch-all";
 import { grossOf, reversalAmount, dayRangeISO, VALID_STATUSES, deadSaleIds, monthStartDhaka, todayDhaka } from "@/lib/sales-ledger";
@@ -84,11 +85,11 @@ type SaleDetail = Omit<SaleRow, "payments"> & {
 };
 
 const statusColor: Record<string, string> = {
-  completed: "bg-primary/10 text-primary",
+  completed: "bg-emerald-500/10 text-emerald-700",
   partial_refund: "bg-amber-500/10 text-amber-700",
   refunded: "bg-destructive/10 text-destructive",
   pending: "bg-muted text-muted-foreground",
-  void: "bg-destructive/10 text-destructive line-through",
+  void: "bg-muted text-muted-foreground",
 };
 
 const fmt = (n: number) => `৳${Number(n || 0).toLocaleString("en-BD", { maximumFractionDigits: 2 })}`;
@@ -141,6 +142,9 @@ function SalesHistoryPage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [dueSaleId, setDueSaleId] = useState<string | null>(null);
   const [cancelId, setCancelId] = useState<string | null>(null);
+  // Return / Exchange open from the row menu; one sheet each, outside the table.
+  const [returnInvoice, setReturnInvoice] = useState<string | null>(null);
+  const [exchangeInvoice, setExchangeInvoice] = useState<string | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelRequestId, setCancelRequestId] = useState(() => crypto.randomUUID());
   const [courierSaleId, setCourierSaleId] = useState<string | null>(null);
@@ -537,86 +541,83 @@ function SalesHistoryPage() {
                   <TableCell className="text-right tabular-nums text-emerald-600">{fmt(Number(s.paid))}</TableCell>
                   <TableCell className={`text-right tabular-nums ${Number(s.due) > 0 ? "text-destructive" : "text-muted-foreground"}`}>{fmt(Number(s.due))}</TableCell>
                   <TableCell>
-                    <div className="flex flex-wrap gap-1">
+                    <div className="flex flex-wrap items-center gap-1">
                       {(s.payments ?? []).filter((p) => Number(p.amount) > 0).map((p, i) => (
                         <Badge key={i} variant="secondary" className={`capitalize text-[11px] ${methodColor[p.method] ?? ""}`}>
-                          {p.method} {fmt(Number(p.amount))}
+                          {p.method === "credit" ? "Store credit" : p.method} {fmt(Number(p.amount))}
                         </Badge>
                       ))}
                       {Number(s.due) > 0 && (
                         <Badge variant="secondary" className="text-[11px] bg-destructive/10 text-destructive">{s.cod ? "COD" : "Due"} {fmt(Number(s.due))}</Badge>
                       )}
-                      {Number(s.due) > 0 && courierOrders[s.id] && courierOrders[s.id].status !== "failed" && (
-                        <Badge variant="secondary" className="text-[11px] bg-sky-50 text-sky-700">
-                          <Truck className="h-3 w-3" /> {courierOrders[s.id].courier === "steadfast" ? "Steadfast" : courierOrders[s.id].courier} Courier
-                        </Badge>
-                      )}
-                      {s.status !== "void" && s.status !== "refunded" && (
-                        // stopPropagation: the row click opened the invoice details
-                        // behind the return sheet; invoiceNo pre-loads this invoice.
-                        <span onClick={(e) => e.stopPropagation()}>
-                          <ReturnFlow
-                            invoiceNo={s.invoice_no}
-                            trigger={<Button size="sm" variant="ghost" title="Return items"><RotateCcw className="h-4 w-4" /></Button>}
-                          />
-                        </span>
-                      )}
-                      {isAdmin && s.status !== "void" && s.status !== "refunded" && canExchange(s.created_at) && (
-                        <span onClick={(e) => e.stopPropagation()}>
-                          <ExchangeFlow
-                            invoiceNo={s.invoice_no}
-                            onPrint={(id) => reprint(id)}
-                            trigger={<Button size="sm" variant="ghost" title="Exchange products"><ArrowLeftRight className="h-4 w-4" /></Button>}
-                          />
-                        </span>
-                      )}
                       {(s.payments ?? []).length === 0 && Number(s.due) <= 0 && <span className="text-xs text-muted-foreground">—</span>}
                     </div>
+                    {courierOrders[s.id] && courierOrders[s.id].status !== "failed" && (
+                      <div className="mt-1 flex items-center gap-1 text-[11px] text-sky-700">
+                        <Truck className="h-3 w-3" />
+                        {courierOrders[s.id].courier === "steadfast" ? "Steadfast" : courierOrders[s.id].courier}
+                        <span className="capitalize text-muted-foreground">· {courierOrders[s.id].status.replace(/_/g, " ")}</span>
+                      </div>
+                    )}
                   </TableCell>
                   <TableCell>
-
-                    <Badge variant="secondary" className={statusColor[s.status] ?? ""}>{s.status.replace("_", " ")}</Badge>
-                    {exchangedIds.has(s.id) && <Badge variant="outline" className="ml-1 text-[11px]">Exchanged</Badge>}
-                    {s.exchange_of_sale_id && <Badge variant="outline" className="ml-1 text-[11px]">Exchange bill</Badge>}
+                    <div className="flex flex-wrap items-center gap-1">
+                      <Badge variant="secondary" className={`capitalize ${statusColor[s.status] ?? ""}`}>{s.status === "void" ? "cancelled" : s.status.replace("_", " ")}</Badge>
+                      {exchangedIds.has(s.id) && <Badge variant="outline" className="text-[11px]">Exchanged</Badge>}
+                      {s.exchange_of_sale_id && <Badge variant="outline" className="text-[11px]">Exchange bill</Badge>}
+                      {isLocked(s.created_at) && s.status !== "void" && (
+                        <Lock className="h-3 w-3 text-muted-foreground" aria-label="Drawer closed — edit and cancel locked" />
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>
-                    <div className="flex gap-1 justify-end">
-                      <Button size="sm" variant="ghost" onClick={() => setDetailId(s.id)} title="View">
-                        <Receipt className="h-4 w-4" />
-                      </Button>
-                      {Number(s.due) > 0 && (
-                        <Button size="sm" variant="ghost" className="text-emerald-600" onClick={() => setDueSaleId(s.id)} title="Collect due payment">
-                          <Wallet className="h-4 w-4" />
+                    <div className="flex items-center justify-end gap-1">
+                      {Number(s.due) > 0 && s.status !== "void" && (
+                        <Button size="sm" variant="outline" className="h-8 border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={() => setDueSaleId(s.id)}>
+                          <Wallet className="h-3.5 w-3.5" /> Collect
                         </Button>
                       )}
-                      <Button size="sm" variant="ghost" onClick={() => reprint(s.id)} disabled={reprintingId === s.id} title="Reprint invoice">
+                      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => reprint(s.id)} disabled={reprintingId === s.id} title="Print invoice" aria-label="Print invoice">
                         <Printer className="h-4 w-4" />
                       </Button>
-                      {isAdmin && s.status !== "void" && !isLocked(s.created_at) && (
-                        <Button size="sm" variant="ghost" onClick={() => setEditId(s.id)} title="Edit customer / note">
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                      )}
-                      {isAdmin && s.status !== "void" && !isLocked(s.created_at) && (
-                        <Button size="sm" variant="ghost" className="text-destructive" onClick={() => { setCancelId(s.id); setCancelReason(""); setCancelRequestId(crypto.randomUUID()); }} title="Cancel sale">
-                          <Ban className="h-4 w-4" />
-                        </Button>
-                      )}
-                      {isAdmin && s.status !== "void" && isLocked(s.created_at) && (
-                        <span className="inline-flex items-center px-1.5 text-muted-foreground" title="Cash drawer closed — edit and cancel are locked. Use Return.">
-                          <Lock className="h-3.5 w-3.5" />
-                        </span>
-                      )}
-                      {s.status !== "void" && (
-                        <Button size="sm" variant="ghost" className={courierOrders[s.id] ? (courierStatusColor[courierOrders[s.id].status] ?? "text-blue-600") : "text-blue-600"} onClick={() => setCourierSaleId(s.id)} title={courierOrders[s.id] ? `Courier: ${courierOrders[s.id].status.replace(/_/g, " ")}` : "Send via courier"}>
-                          <Truck className="h-4 w-4" />
-                          {courierOrders[s.id] && <span className="ml-1 text-[11px] capitalize">{courierOrders[s.id].status.replace(/_/g, " ")}</span>}
-                        </Button>
-                      )}
-
-
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button size="icon" variant="ghost" className="h-8 w-8" aria-label={`More actions for ${s.invoice_no}`}>
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-52">
+                          <DropdownMenuItem onSelect={() => setDetailId(s.id)}><Receipt className="h-4 w-4" /> View details</DropdownMenuItem>
+                          {s.status !== "void" && s.status !== "refunded" && (
+                            <DropdownMenuItem onSelect={() => setReturnInvoice(s.invoice_no)}><RotateCcw className="h-4 w-4" /> Return items</DropdownMenuItem>
+                          )}
+                          {isAdmin && s.status !== "void" && s.status !== "refunded" && canExchange(s.created_at) && (
+                            <DropdownMenuItem onSelect={() => setExchangeInvoice(s.invoice_no)}><ArrowLeftRight className="h-4 w-4" /> Exchange products</DropdownMenuItem>
+                          )}
+                          {s.status !== "void" && (
+                            <DropdownMenuItem onSelect={() => setCourierSaleId(s.id)}>
+                              <Truck className="h-4 w-4" /> {courierOrders[s.id] ? "Courier status" : "Send via courier"}
+                            </DropdownMenuItem>
+                          )}
+                          {isAdmin && s.status !== "void" && (
+                            <>
+                              <DropdownMenuSeparator />
+                              {isLocked(s.created_at) ? (
+                                <DropdownMenuItem disabled><Lock className="h-4 w-4" /> Edit / cancel locked (drawer closed)</DropdownMenuItem>
+                              ) : (
+                                <>
+                                  <DropdownMenuItem onSelect={() => setEditId(s.id)}><Pencil className="h-4 w-4" /> Edit customer / note</DropdownMenuItem>
+                                  <DropdownMenuItem className="text-destructive focus:text-destructive"
+                                    onSelect={() => { setCancelId(s.id); setCancelReason(""); setCancelRequestId(crypto.randomUUID()); }}>
+                                    <Ban className="h-4 w-4" /> Cancel sale
+                                  </DropdownMenuItem>
+                                </>
+                              )}
+                            </>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
-
                   </TableCell>
                 </TableRow>
               ))}
@@ -624,6 +625,14 @@ function SalesHistoryPage() {
           </Table>
         </CardContent>
       </Card>
+
+      {returnInvoice && (
+        <ReturnFlow invoiceNo={returnInvoice} open onOpenChange={(o) => { if (!o) { setReturnInvoice(null); refetch(); } }} />
+      )}
+      {exchangeInvoice && (
+        <ExchangeFlow invoiceNo={exchangeInvoice} open onPrint={(id) => reprint(id)}
+          onOpenChange={(o) => { if (!o) { setExchangeInvoice(null); refetch(); } }} />
+      )}
 
       <Dialog open={!!detailId} onOpenChange={(o) => !o && setDetailId(null)}>
         <DialogContent className="max-w-lg print:max-w-full print:shadow-none">

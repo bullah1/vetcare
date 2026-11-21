@@ -24,9 +24,15 @@ type SaleItem = {
   returned_quantity: number;
 };
 
-export function ReturnFlow({ trigger, invoiceNo }: { trigger?: React.ReactNode; invoiceNo?: string }) {
+export function ReturnFlow({ trigger, invoiceNo, open: openProp, onOpenChange }: {
+  trigger?: React.ReactNode; invoiceNo?: string; open?: boolean; onOpenChange?: (open: boolean) => void;
+}) {
   const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
+  // Controlled (open from a menu) or uncontrolled (own trigger button).
+  const [innerOpen, setInnerOpen] = useState(false);
+  const controlled = openProp !== undefined;
+  const open = controlled ? !!openProp : innerOpen;
+  const setOpen = (v: boolean) => { if (!controlled) setInnerOpen(v); onOpenChange?.(v); };
   const [invoice, setInvoice] = useState("");
   const [searched, setSearched] = useState("");
   const [qtyMap, setQtyMap] = useState<Record<string, number>>({});
@@ -171,9 +177,11 @@ export function ReturnFlow({ trigger, invoiceNo }: { trigger?: React.ReactNode; 
 
   return (
     <Sheet open={open} onOpenChange={(v) => { setOpen(v); if (!v) reset(); }}>
-      <SheetTrigger asChild>
-        {trigger ?? <Button variant="outline"><Undo2 className="h-4 w-4" /> Return</Button>}
-      </SheetTrigger>
+      {(!controlled || trigger) && (
+        <SheetTrigger asChild>
+          {trigger ?? <Button variant="outline"><Undo2 className="h-4 w-4" /> Return</Button>}
+        </SheetTrigger>
+      )}
       <SheetContent side="bottom" className="max-h-[92vh] overflow-auto rounded-t-2xl p-4 sm:p-6 sm:max-w-2xl sm:mx-auto">
         <SheetHeader className="text-left mb-3">
           <SheetTitle className="flex items-center gap-2"><Undo2 className="h-4 w-4" /> Return &amp; Refund</SheetTitle>
