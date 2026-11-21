@@ -214,7 +214,7 @@ function SalesHistoryPage() {
       const rows = await fetchAll<any>(() =>
         supabase
           .from("sale_returns")
-          .select(`sale_id,refund_amount,created_at, sales(id,status,total,subtotal,discount,created_at${bizOn ? ",project" : ""})`)
+          .select(`sale_id,refund_amount,created_at, sales!sale_returns_sale_id_fkey(id,status,total,subtotal,discount,created_at${bizOn ? ",project" : ""})`)
           .gte("created_at", fromISO)
           .lte("created_at", toISO)
           .order("created_at") as any,
