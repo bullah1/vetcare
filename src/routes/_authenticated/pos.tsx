@@ -1753,58 +1753,6 @@ function POSPage() {
         </div>
       </div>
 
-      {/* Delivery */}
-      <div className={`rounded-lg border ${delOn ? "border-sky-200 bg-sky-50/60" : ""}`}>
-        <label htmlFor={delId} className="flex cursor-pointer items-center justify-between px-3 py-2">
-          <span className="flex items-center gap-2 text-sm font-medium">
-            <Bike className="h-4 w-4 text-sky-700" /> Delivery
-            {delOn && delManId && (
-              <span className="font-normal text-muted-foreground">· {deliveryMen.find((m) => m.id === delManId)?.name}</span>
-            )}
-          </span>
-          <Switch id={delId} checked={delOn} onCheckedChange={setDelOn} />
-        </label>
-        {delOn && (
-          <div className="space-y-2 border-t border-sky-200 p-3">
-            {delAdding ? (
-              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] gap-2">
-                <Input placeholder="Name" value={delNewName} onChange={(e) => setDelNewName(e.target.value)} autoFocus />
-                <Input placeholder="Phone" inputMode="tel" value={delNewPhone} onChange={(e) => setDelNewPhone(e.target.value)} />
-                <Button type="button" size="sm" className="h-10" disabled={!delNewName.trim() || addDeliveryMan.isPending} onClick={() => addDeliveryMan.mutate()}>Save</Button>
-                <Button type="button" size="sm" variant="ghost" className="h-10 px-2" onClick={() => setDelAdding(false)}>Cancel</Button>
-              </div>
-            ) : (
-              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
-                <Select value={delManId} onValueChange={setDelManId}>
-                  <SelectTrigger className="min-w-0 bg-background"><SelectValue placeholder={deliveryMen.length ? "Delivery man" : "Add a delivery man"} /></SelectTrigger>
-                  <SelectContent>
-                    {deliveryMen.map((m) => (
-                      <SelectItem key={m.id} value={m.id}>{m.name}{m.phone ? ` · ${m.phone}` : ""}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button type="button" variant="outline" size="icon" className="bg-background" title="Add delivery man" onClick={() => setDelAdding(true)}>
-                  <Plus className="h-4 w-4" />
-                </Button>
-              </div>
-            )}
-            {deliveryMenError ? (
-              <p className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
-                Could not load delivery men: {(deliveryMenError as any)?.message ?? "unknown error"}
-              </p>
-            ) : !deliveryMenLoading && deliveryMen.length === 0 && !delAdding ? (
-              <p className="text-xs text-muted-foreground">No delivery man yet — press + to add one.</p>
-            ) : null}
-            <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-2">
-              <Input className="bg-background" inputMode="decimal" placeholder="Charge ৳" value={delCharge} onChange={(e) => setDelCharge(e.target.value.replace(/[^0-9.]/g, ""))} />
-              <Input className="bg-background" placeholder="Address" value={delAddress} onChange={(e) => setDelAddress(e.target.value)} />
-            </div>
-            <Input className="bg-background" placeholder="Note for delivery man (optional)" value={delNote} onChange={(e) => setDelNote(e.target.value)} />
-            <p className="text-[11px] text-muted-foreground">Delivery charge is added to this bill — it goes to cash with the payment and counts in sales and profit.</p>
-          </div>
-        )}
-      </div>
-
       {/* Payment */}
       <div className="space-y-2">
         <div className="grid grid-cols-4 gap-1.5" role="radiogroup" aria-label="Payment method">
