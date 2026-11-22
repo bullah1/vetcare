@@ -274,7 +274,7 @@ const ProductCard = memo(function ProductCard({ p, ranges, onAdd, active = false
         <PosThumb path={p.image_url} name={p.name} />
         <div className="min-w-0 flex-1">
           <HighlightText className="line-clamp-2 text-[13px] font-medium leading-snug text-foreground" text={p.name} ranges={ranges} />
-          {p.category && <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{niceCategory(p.category)}</p>}
+          {(p.cat_name || p.category) && <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{p.cat_name ?? niceCategory(p.category)}</p>}
         </div>
       </div>
       <div className="mt-auto flex items-end justify-between gap-2 pt-2.5">
@@ -306,7 +306,7 @@ const ProductRow = memo(function ProductRow({ p, ranges, onAdd, active = false }
       <PosThumb path={p.image_url} name={p.name} />
       <span className="min-w-0 flex-1">
         <HighlightText className="block truncate text-[13px] font-medium text-foreground" text={p.name} ranges={ranges} />
-        <span className="block truncate text-[11px] text-muted-foreground">{[p.category && niceCategory(p.category), p.sku && `SKU ${p.sku}`].filter(Boolean).join("   ")}</span>
+        <span className="block truncate text-[11px] text-muted-foreground">{[p.cat_name ?? (p.category && niceCategory(p.category)), p.sku && `SKU ${p.sku}`].filter(Boolean).join("   ")}</span>
       </span>
       <span className={`hidden w-28 shrink-0 items-center justify-end gap-1 text-[11px] font-medium tabular-nums sm:flex ${stockTone}`}>
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
@@ -343,6 +343,8 @@ type Product = {
   no_stock?: boolean | null;
   /** Can be sold in parts (0.5, 1.5 …) — set per product in Inventory. */
   loose_sale?: boolean | null;
+  /** Product category (Dry Food, Wet Food …) and its name, for the POS category filter. */
+  category_id?: string | null; cat_name?: string | null;
 };
 type CartLine = {
   /** Part quantities allowed (loose sale product). */
@@ -403,7 +405,11 @@ async function loadPosProducts(): Promise<Product[]> {
   // Bulk / Mixed products (no_stock) are made into mini packs, never sold here.
   const all = await withSchemaFallback(
     "products.loose_sale",
-    () => loadPosProductsWith(",project,no_stock,loose_sale"),
+    () => withSchemaFallback(
+      "products.category_id",
+      () => loadPosProductsWith(",project,no_stock,loose_sale,category_id"),
+      () => loadPosProductsWith(",project,no_stock,loose_sale"),
+    ),
     () => withSchemaFallback(
       "products.no_stock",
       () => loadPosProductsWith(",project,no_stock"),
@@ -569,9 +575,23 @@ function POSPage() {
     refetchOnWindowFocus: false,
   });
   // Only this project's products are shown, searched and scanned.
+  // Categories of this business (Dry Food, Wet Food …) in their set order.
+  const { data: posCats = [] } = useQuery({
+    queryKey: ["pos-categories"],
+    staleTime: 10 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await (supabase as any).from("product_categories")
+        .select("id,name,project,sort,is_active").eq("is_active", true).order("sort").order("name");
+      if (error) return [] as { id: string; name: string; project: string; sort: number }[];
+      return data as { id: string; name: string; project: string; sort: number }[];
+    },
+  });
+  const catNameById = useMemo(() => new Map(posCats.map((c) => [c.id, c.name])), [posCats]);
   const products = useMemo(
-    () => allProducts.filter((p) => asProject(p.project) === project),
-    [allProducts, project],
+    () => allProducts
+      .filter((p) => asProject(p.project) === project)
+      .map((p) => (p.category_id && catNameById.has(p.category_id) ? { ...p, cat_name: catNameById.get(p.category_id)! } : p)),
+    [allProducts, project, catNameById],
   );
   const switchProject = (p: Project) => {
     if (p === project) return;
@@ -879,6 +899,14 @@ function POSPage() {
   // Deferred query keeps typing/scanning responsive while the grid catches up.
   const deferredQ = useDeferredValue(q);
 
+  // Category filter: works together with the search.
+  const [catId, setCatId] = useState<string>("all");
+  useEffect(() => { setCatId("all"); }, [project]);
+  const catChips = useMemo(() => {
+    const used = new Set(products.map((p) => p.category_id).filter(Boolean));
+    return posCats.filter((c) => asProject(c.project) === project && used.has(c.id));
+  }, [posCats, products, project]);
+
   // Units sold per product over the last 90 days — best sellers are shown
   // first, and among equally good matches the best seller wins.
   const { data: soldMap } = useQuery({
@@ -911,14 +939,16 @@ function POSPage() {
     (text: string, limit: number) => {
       const s = text.replace(/\s+/g, " ").trim();
       const sold = (id: string) => soldMap?.get(id) ?? 0;
+      const inCat = (p: Product) => catId === "all" || p.category_id === catId;
       if (!s) {
-        return [...products]
+        return products.filter(inCat)
           .sort((a, b) => sold(b.id) - sold(a.id))
           .slice(0, limit)
           .map((p) => ({ p, ranges: [] as MatchRange[] }));
       }
       const scored: { p: Product; ranges: MatchRange[]; tier: number; score: number }[] = [];
       for (const it of index) {
+        if (!inCat(it.p)) continue;
         const m = fuzzyMatch(it.p.name, s);
         if (m) {
           const tier = m.score >= 1100 ? 3 : m.score >= 900 ? 2 : 1;
@@ -930,10 +960,11 @@ function POSPage() {
       scored.sort((a, b) => b.tier - a.tier || sold(b.p.id) - sold(a.p.id) || b.score - a.score);
       return scored.slice(0, limit);
     },
-    [index, products, soldMap],
+    [index, products, soldMap, catId],
   );
 
-  const filtered = useMemo(() => searchProducts(deferredQ, 40), [searchProducts, deferredQ]);
+  // A picked category shows all of its products; otherwise the top matches / best sellers.
+  const filtered = useMemo(() => searchProducts(deferredQ, catId === "all" ? 40 : 500), [searchProducts, deferredQ, catId]);
 
   // Search inside the mobile cart sheet so more products can be added without
   // closing the cart.
@@ -2047,9 +2078,22 @@ function POSPage() {
               </p>
             )}
           </div>
+          {catChips.length > 0 && (
+            <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1 [scrollbar-width:none]" role="tablist" aria-label="Category">
+              {[{ id: "all", name: "All" }, ...catChips].map((c) => {
+                const on = catId === c.id;
+                return (
+                  <button key={c.id} type="button" role="tab" aria-selected={on} onClick={() => { setCatId(c.id); setHi(-1); }}
+                    className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${on ? "border-foreground bg-foreground text-background" : "bg-card text-muted-foreground hover:text-foreground"}`}>
+                    {c.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <div className="flex items-center justify-between gap-2 px-1">
             <p className="text-xs font-medium text-muted-foreground">
-              {q.trim() ? `${filtered.length} match${filtered.length === 1 ? "" : "es"}` : filtered.length > 0 ? "Best sellers" : ""}
+              {q.trim() ? `${filtered.length} match${filtered.length === 1 ? "" : "es"}` : catId !== "all" ? `${filtered.length} product${filtered.length === 1 ? "" : "s"}` : filtered.length > 0 ? "Best sellers" : ""}
             </p>
             <div className="flex items-center gap-2">
             {isAdmin ? (

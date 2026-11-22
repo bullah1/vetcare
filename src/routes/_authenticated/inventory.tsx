@@ -4,7 +4,7 @@ import { SupplierLedgerDialog } from "@/components/SupplierLedgerDialog";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Package, Plus, Search, AlertTriangle, Truck, PackagePlus, Printer, Wand2, ClipboardEdit, FileDown, Trash2, Upload } from "lucide-react";
+import { Package, Plus, Search, AlertTriangle, Truck, PackagePlus, Printer, Wand2, ClipboardEdit, FileDown, Trash2, Upload, ClipboardList, Tags } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -141,6 +141,8 @@ function ProductsTab() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
   const [countOpen, setCountOpen] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [recatOpen, setRecatOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [deleting, setDeleting] = useState<Product | null>(null);
   const { hasRole } = useAuth();
@@ -179,7 +181,14 @@ function ProductsTab() {
   });
 
   const inProject = (p: Product) => projectFilter === "all" || (p.project ?? "pcv") === projectFilter;
-  const availableCategories = Array.from(new Set(products.filter(inProject).map(catName))).sort();
+  // Category order (Dry Food, Wet Food … as set in Categories): Pet Care first, then Sasthya Seba.
+  const catRank = (p: Product) => {
+    const c = p.category_id ? catById.get(p.category_id) : undefined;
+    return c ? (asProject(c.project) === "ss" ? 1000 : 0) + (Number(c.sort) || 0) : 5000;
+  };
+  const availableCategories = Array.from(
+    products.filter(inProject).reduce((m, p) => (m.has(catName(p)) ? m : m.set(catName(p), catRank(p))), new Map<string, number>()),
+  ).sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0])).map(([n]) => n);
   const projectCount = (k: Project) => products.filter((p) => (p.project ?? "pcv") === k).length;
 
   // Typo-tolerant name search; matched words are highlighted in the list.
@@ -218,7 +227,9 @@ function ProductsTab() {
   const saleValue = (p: Product) => Math.max(0, Number(p.stock_quantity) || 0) * (Number(p.selling_price) || 0);
   const [sortBy, setSortBy] = useState<"name" | "stock" | "value">("name");
   const [view, setView] = useState<"products" | "categories">("products");
-  const sorted = sortBy === "name" ? filtered
+  // "Name" lists products category by category (in category order), A→Z inside each.
+  const sorted = sortBy === "name"
+    ? [...filtered].sort((a, b) => catRank(a) - catRank(b) || catName(a).localeCompare(catName(b)) || a.name.localeCompare(b.name))
     : [...filtered].sort((a, b) => sortBy === "stock"
       ? Number(b.stock_quantity) - Number(a.stock_quantity)
       : costValue(b) - costValue(a));
@@ -354,6 +365,14 @@ function ProductsTab() {
           <Upload className="h-4 w-4" /> Upload products
         </Button>
         <ProductImportDialog open={importOpen} onOpenChange={setImportOpen} existing={products as any[]} />
+        <Button variant="outline" size="sm" onClick={() => setSheetOpen(true)}>
+          <ClipboardList className="h-4 w-4" /> Stock Sheet
+        </Button>
+        {isAdmin && selected.size > 0 && (
+          <Button variant="outline" size="sm" onClick={() => setRecatOpen(true)}>
+            <Tags className="h-4 w-4" /> Change category ({selected.size})
+          </Button>
+        )}
         <Button variant="outline" size="sm" onClick={() => setCountOpen(true)}>
           <ClipboardEdit className="h-4 w-4" /> Stock Adjustment
         </Button>
@@ -630,6 +649,20 @@ function ProductsTab() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <StockSheetDialog
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+        products={products.filter((p) => p.is_active && inProject(p))}
+        projectFilter={projectFilter}
+        catName={catName}
+        catRank={catRank}
+      />
+      <RecategorizeDialog
+        open={recatOpen}
+        onOpenChange={setRecatOpen}
+        products={products.filter((p) => selected.has(p.id))}
+        onDone={() => { setRecatOpen(false); setSelected(new Set()); queryClient.invalidateQueries({ queryKey: ["products"] }); }}
+      />
       <BarcodeLabelDialog
         open={bulkOpen}
         onOpenChange={setBulkOpen}
@@ -638,6 +671,142 @@ function ProductsTab() {
         onDone={() => { setBulkOpen(false); setSelected(new Set()); }}
       />
     </div>
+  );
+}
+
+/** Monthly physical stock sheet: all categories or one, as an .xlsx. Reading only. */
+function StockSheetDialog({ open, onOpenChange, products, projectFilter, catName, catRank }: {
+  open: boolean; onOpenChange: (v: boolean) => void; products: Product[];
+  projectFilter: "all" | Project; catName: (p: Product) => string; catRank: (p: Product) => number;
+}) {
+  const [scope, setScope] = useState("all");
+  const [busy, setBusy] = useState(false);
+  // Services are not stock: left out. Everything else is counted, zero stock included.
+  const stockItems = products.filter((p) => catName(p) !== "Service" && p.category !== "service");
+  const groups = useMemo(() => {
+    const m = new Map<string, { rank: number; items: Product[] }>();
+    for (const p of stockItems) {
+      const k = catName(p);
+      const g = m.get(k) ?? { rank: catRank(p), items: [] };
+      g.items.push(p);
+      m.set(k, g);
+    }
+    return [...m.entries()].sort((a, b) => a[1].rank - b[1].rank || a[0].localeCompare(b[0]))
+      .map(([title, g]) => ({ title, products: g.items.sort((a, b) => a.name.localeCompare(b.name)) }));
+  }, [stockItems]); // eslint-disable-line react-hooks/exhaustive-deps
+  const chosen = scope === "all" ? groups : groups.filter((g) => g.title === scope);
+  const count = chosen.reduce((n, g) => n + g.products.length, 0);
+
+  async function download() {
+    setBusy(true);
+    try {
+      const { downloadStockSheet } = await import("@/lib/stock-sheet-export");
+      await downloadStockSheet({
+        sections: chosen,
+        business: projectFilter === "all" ? "All businesses" : projectLabel(projectFilter),
+        scope: scope === "all" ? "All Categories" : scope,
+      });
+      toast.success(`Stock sheet downloaded — ${count} products`);
+      onOpenChange(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Download failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Monthly stock sheet</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Excel sheet for counting stock by hand: SL, product, sale price, current stock, a blank column for the
+            physical count and the change. Every product is listed, zero stock too. Nothing in the POS changes.
+          </p>
+          <div className="space-y-1.5">
+            <Label>Category</Label>
+            <Select value={scope} onValueChange={setScope}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Categories ({stockItems.length})</SelectItem>
+                {groups.map((g) => <SelectItem key={g.title} value={g.title}>{g.title} ({g.products.length})</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Business: {projectFilter === "all" ? "all businesses" : projectLabel(projectFilter)} — change it with the tabs above the list.
+            </p>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={download} disabled={busy || count === 0}>
+            <FileDown className="h-4 w-4" /> {busy ? "Preparing…" : `Download .xlsx (${count})`}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Move the selected products to another category of the same business. */
+function RecategorizeDialog({ open, onOpenChange, products, onDone }: {
+  open: boolean; onOpenChange: (v: boolean) => void; products: Product[]; onDone: () => void;
+}) {
+  const { cats } = useProductCategories();
+  const [catId, setCatId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const projects = new Set(products.map((p) => asProject(p.project)));
+  const options = cats.filter((c) => c.is_active && projects.has(asProject(c.project)));
+  const target = cats.find((c) => c.id === catId);
+  const movable = target ? products.filter((p) => asProject(p.project) === asProject(target.project)) : [];
+
+  async function save() {
+    if (!target) return;
+    setBusy(true);
+    try {
+      const ids = movable.map((p) => p.id);
+      for (let i = 0; i < ids.length; i += 150) {
+        const { error } = await (supabase as any).from("products")
+          .update({ category_id: target.id, category: target.legacy_category })
+          .in("id", ids.slice(i, i + 150));
+        if (error) throw error;
+      }
+      const skipped = products.length - movable.length;
+      toast.success(`${movable.length} product(s) moved to ${target.name}${skipped ? ` — ${skipped} of the other business skipped` : ""}`);
+      setCatId("");
+      onDone();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not change the category");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Change category — {products.length} product(s)</DialogTitle></DialogHeader>
+        <div className="space-y-1.5">
+          <Label>New category</Label>
+          <Select value={catId} onValueChange={setCatId}>
+            <SelectTrigger><SelectValue placeholder="Choose a category" /></SelectTrigger>
+            <SelectContent>
+              {options.map((c) => (
+                <SelectItem key={c.id} value={c.id}>{c.name}{projects.size > 1 ? ` · ${projectLabel(asProject(c.project))}` : ""}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {target && movable.length < products.length && (
+            <p className="text-xs text-amber-700">{products.length - movable.length} selected product(s) belong to the other business and stay as they are.</p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={save} disabled={!target || busy || movable.length === 0}>{busy ? "Saving…" : "Move"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
