@@ -2,7 +2,7 @@ import { asBiz, bizLabel, bizMatches, type Biz } from "@/components/BusinessBadg
 import { BusinessPicker } from "@/components/BusinessPicker";
 import { SupplierLedgerDialog } from "@/components/SupplierLedgerDialog";
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Package, Plus, Search, AlertTriangle, Truck, PackagePlus, Printer, Wand2, ClipboardEdit, FileDown, Trash2, Upload, ClipboardList, Tags } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
@@ -233,6 +233,8 @@ function ProductsTab() {
     : [...filtered].sort((a, b) => sortBy === "stock"
       ? Number(b.stock_quantity) - Number(a.stock_quantity)
       : costValue(b) - costValue(a));
+  const catKey = (p: Product) => `${p.project ?? "pcv"}|${catName(p)}`;
+  const catCounts = filtered.reduce((m, p) => m.set(catKey(p), (m.get(catKey(p)) ?? 0) + 1), new Map<string, number>());
   const totals = filtered.reduce((t, p) => ({
     qty: t.qty + Math.max(0, Number(p.stock_quantity) || 0),
     cost: t.cost + costValue(p),
@@ -507,7 +509,47 @@ function ProductsTab() {
         </Card>
       )}
 
-      <Card className={view === "products" ? "" : "hidden"}>
+      {/* Phones: products grouped by category, one card each */}
+      <div className={view === "products" ? "space-y-1.5 md:hidden" : "hidden"}>
+        {isLoading && <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p>}
+        {!isLoading && filtered.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">No products found.</p>}
+        {sorted.map((p, i) => {
+          const low = Number(p.stock_quantity) <= Number(p.low_stock_threshold);
+          const heading = sortBy === "name" && (i === 0 || catName(sorted[i - 1]) !== catName(p) || (sorted[i - 1].project ?? "pcv") !== (p.project ?? "pcv"));
+          return (
+            <Fragment key={p.id}>
+              {heading && (
+                <p className="sticky top-14 z-10 -mx-1 bg-background/95 px-1 pb-1 pt-3 text-sm font-semibold backdrop-blur">
+                  {catName(p)} <span className="text-xs font-normal text-muted-foreground">· {catCounts.get(catKey(p)) ?? 0}</span>
+                </p>
+              )}
+              <div className={`flex items-center gap-3 rounded-xl border bg-card p-2.5 ${selected.has(p.id) ? "border-primary bg-primary/5" : ""}`}>
+                <Checkbox checked={selected.has(p.id)} aria-label={`Select ${p.name}`}
+                  onCheckedChange={(v) => setSelected((prev) => { const n = new Set(prev); if (v) n.add(p.id); else n.delete(p.id); return n; })} />
+                <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 text-left" onClick={() => { setEditing(p); setOpen(true); }}>
+                  <ProductThumb path={p.image_url} name={p.name} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium"><HighlightText text={p.name} ranges={searchRanges.get(p.id)} /></span>
+                    <span className="block text-xs text-muted-foreground tabular-nums">
+                      ৳ {Number(p.selling_price).toFixed(0)}
+                      {!p.is_active && " · Inactive"}
+                      {sortBy !== "name" && ` · ${catName(p)}`}
+                    </span>
+                  </span>
+                  <span className={`shrink-0 text-right text-sm font-semibold tabular-nums ${low ? "text-destructive" : ""}`}>
+                    {Number(p.stock_quantity)}<span className="ml-0.5 text-[11px] font-normal text-muted-foreground">{p.unit ?? ""}</span>
+                  </span>
+                </button>
+                <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" aria-label={`Adjust stock of ${p.name}`} onClick={() => setAdjusting(p)}>
+                  <ClipboardEdit className="h-4 w-4" />
+                </Button>
+              </div>
+            </Fragment>
+          );
+        })}
+      </div>
+
+      <Card className={view === "products" ? "hidden md:block" : "hidden"}>
         <CardContent className="p-0">
           <Table>
             <TableHeader>
@@ -518,7 +560,7 @@ function ProductsTab() {
                     onCheckedChange={(v) => {
                       setSelected((prev) => {
                         const next = new Set(prev);
-                        if (v) filtered.forEach((p) => { if (p.barcode) next.add(p.id); });
+                        if (v) filtered.forEach((p) => next.add(p.id));
                         else filtered.forEach((p) => next.delete(p.id));
                         return next;
                       });
@@ -541,13 +583,23 @@ function ProductsTab() {
               {!isLoading && filtered.length === 0 && (
                 <TableRow><TableCell colSpan={9} className="text-center py-6 text-muted-foreground">No products yet.</TableCell></TableRow>
               )}
-              {sorted.map((p) => {
+              {sorted.map((p, i) => {
                 const low = Number(p.stock_quantity) <= Number(p.low_stock_threshold);
+                // Category heading row when the list is in category order.
+                const heading = sortBy === "name" && (i === 0 || catName(sorted[i - 1]) !== catName(p) || (sorted[i - 1].project ?? "pcv") !== (p.project ?? "pcv"));
                 return (
-                  <TableRow key={p.id} data-state={selected.has(p.id) ? "selected" : undefined}>
+                  <Fragment key={p.id}>
+                  {heading && (
+                    <TableRow className="bg-muted/60 hover:bg-muted/60">
+                      <TableCell colSpan={9} className="py-2 text-sm font-semibold">
+                        {catName(p)}
+                        <span className="ml-2 text-xs font-normal text-muted-foreground">{catCounts.get(catKey(p)) ?? 0} products</span>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  <TableRow data-state={selected.has(p.id) ? "selected" : undefined}>
                     <TableCell>
                       <Checkbox
-                        disabled={!p.barcode}
                         checked={selected.has(p.id)}
                         onCheckedChange={(v) => {
                           setSelected((prev) => {
@@ -621,6 +673,7 @@ function ProductsTab() {
                       </div>
                     </TableCell>
                   </TableRow>
+                  </Fragment>
                 );
               })}
             </TableBody>
@@ -984,7 +1037,8 @@ function ProductDialog({ product, defaultProject = "pcv", hasNoStock = false, ha
       if (hasNoStock) payload.no_stock = noStock;
       if (hasLoose) payload.loose_sale = looseSale;
       if (hasCats) {
-        // Category is optional; when set it must be of the same business (the server keeps them in step).
+        // Every product needs a category of its own business (the server keeps them in step).
+        if (!pickedCat) throw new Error("Choose a category");
         payload.project = business;
         payload.category_id = pickedCat?.id ?? null;
         if (pickedCat) payload.category = pickedCat.legacy_category;
@@ -1069,12 +1123,11 @@ function ProductDialog({ product, defaultProject = "pcv", hasNoStock = false, ha
           </div>
         )}
         <div className="space-y-2">
-          <Label>Category</Label>
+          <Label>Category <span className="text-destructive">*</span></Label>
           {hasCats ? (
-            <Select value={pickedCat ? categoryId : "none"} onValueChange={(v) => setCategoryId(v === "none" ? "" : v)}>
-              <SelectTrigger aria-label="Category"><SelectValue /></SelectTrigger>
+            <Select value={pickedCat ? categoryId : ""} onValueChange={setCategoryId}>
+              <SelectTrigger aria-label="Category" className={pickedCat ? "" : "text-muted-foreground"}><SelectValue placeholder="Choose a category" /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">No category</SelectItem>
                 {businessCats.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
               </SelectContent>
             </Select>
