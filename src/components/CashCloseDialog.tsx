@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  BIZ, METHOD_LABEL, accIn, creditNet, accOut, ensureCloseReportV2, loadCloseSummary, num, printCloseV2,
+  BIZ, METHOD_LABEL, accIn, creditNet, accOut, cashBreakdown, collectionSplit, ensureCloseReportV2, loadCloseSummary, num, printCloseV2,
   type BizKey, type CloseV2,
 } from "@/lib/cash-close-v2";
 
@@ -118,11 +118,21 @@ export function CashCloseDialog({ shiftId, onDone }: { shiftId: string; onDone: 
                     <h3 id="cc-cash" className="text-sm font-medium text-muted-foreground">Cash that should be in the drawer</h3>
                     <p className="text-3xl font-bold tabular-nums">{money(expected)}</p>
                   </div>
-                  <div className="text-right text-xs leading-5 text-muted-foreground tabular-nums">
-                    <div>Opening {money(cash.opening)}</div>
-                    <div className="text-emerald-700">+ Cash in {money(accIn(cash))}</div>
-                    <div className="text-destructive">− Cash out {money(accOut(cash))}</div>
-                  </div>
+                  {(() => {
+                    const cb = cashBreakdown(s);
+                    const out = cb.expenses + cb.supplier + cb.manualOut;
+                    return (
+                      <dl className="min-w-[13rem] text-xs leading-5 tabular-nums">
+                        <div className="flex justify-between gap-4 text-muted-foreground"><dt>Opening</dt><dd>{money(cb.opening)}</dd></div>
+                        <div className="flex justify-between gap-4 text-emerald-700"><dt>+ Sales cash</dt><dd>{money(cb.sales)}</dd></div>
+                        <div className="flex justify-between gap-4 text-emerald-700"><dt>+ Previous due cash</dt><dd>{money(cb.prevDue)}</dd></div>
+                        {cb.refundOld !== 0 && <div className="flex justify-between gap-4 text-destructive"><dt>− Refund (older bills)</dt><dd>{money(cb.refundOld)}</dd></div>}
+                        {out !== 0 && <div className="flex justify-between gap-4 text-destructive"><dt>− Expense / cash out</dt><dd>{money(out)}</dd></div>}
+                        {cb.manualIn !== 0 && <div className="flex justify-between gap-4 text-emerald-700"><dt>+ Cash in</dt><dd>{money(cb.manualIn)}</dd></div>}
+                        {cb.other !== 0 && <div className="flex justify-between gap-4 text-muted-foreground"><dt>Other adjustments</dt><dd>{money(cb.other)}</dd></div>}
+                      </dl>
+                    );
+                  })()}
                 </div>
 
                 <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -199,7 +209,17 @@ export function CashCloseDialog({ shiftId, onDone }: { shiftId: string; onDone: 
                     <p className="text-2xl font-semibold tabular-nums">{money(b.collection.total_collection)}</p>
                     <div className="mt-2 border-t pt-1">
                       {methods.length === 0 && <p className="py-1 text-sm text-muted-foreground">No collection yet</p>}
-                      {methods.map((m) => <Line key={m.method} label={METHOD_LABEL[m.method] ?? m.method} value={m.collection} />)}
+                      {methods.length > 0 && (() => {
+                        const sp = collectionSplit(b.collection);
+                        return (
+                          <>
+                            <Line label="Sales collection" hint="this shift's bills" value={sp.salesTotal} strong />
+                            {sp.sales.map((m) => <div key={`s-${m.method}`} className="pl-3"><Line label={METHOD_LABEL[m.method] ?? m.method} value={m.amount} /></div>)}
+                            <Line label="Previous due collection" hint="older bills" value={sp.prevTotal} strong />
+                            {sp.prev.map((m) => <div key={`p-${m.method}`} className="pl-3"><Line label={METHOD_LABEL[m.method] ?? m.method} value={m.amount} /></div>)}
+                          </>
+                        );
+                      })()}
                       {num(b.collection.refund_paid) > 0 && <Line label="Refund paid (older bills)" value={b.collection.refund_paid} minus />}
                       {creditNet(b.collection) !== 0 && (
                         <Line label={creditNet(b.collection) > 0 ? "Store credit kept" : "Store credit used"} value={Math.abs(creditNet(b.collection))} hint="not cash" />

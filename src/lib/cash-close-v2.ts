@@ -32,6 +32,30 @@ export type CollectionPart = {
 };
 
 /** Store credit kept on customer accounts in this close (+) or spent from earlier credit (−). */
+/** Drawer cash, line by line: today's sales cash and previous-due cash shown apart. */
+export function cashBreakdown(s: CloseV2) {
+  const cash = s.accounts.find((a) => a.method === "cash");
+  const m = s.business.all.collection.methods.find((x) => x.method === "cash");
+  const opening = num(cash?.opening);
+  const sales = num(m?.bill_collection);
+  const prevDue = num(m?.prev_due_collection);
+  const refundOld = num(m?.refund_paid);
+  const expenses = num(cash?.expenses);
+  const supplier = num(cash?.supplier_payments);
+  const manualIn = num(cash?.manual_in);
+  const manualOut = num(cash?.manual_out);
+  const expected = num(cash?.expected);
+  // Anything not covered above (e.g. a bill cancelled and paid back in the same shift).
+  const other = num(expected - (opening + sales + prevDue - refundOld - expenses - supplier + manualIn - manualOut));
+  return { opening, sales, prevDue, refundOld, expenses, supplier, manualIn, manualOut, other, expected };
+}
+/** Collection split per method: today's bills vs previous due. */
+export function collectionSplit(c: CollectionPart) {
+  const sales = c.methods.filter((m) => num(m.bill_collection) !== 0).map((m) => ({ method: m.method, amount: num(m.bill_collection) }));
+  const prev = c.methods.filter((m) => num(m.prev_due_collection) !== 0).map((m) => ({ method: m.method, amount: num(m.prev_due_collection) }));
+  return { sales, prev, salesTotal: num(c.bill_collection), prevTotal: num(c.prev_due_collection) };
+}
+
 export const creditNet = (c: CollectionPart) => num(num(c.credit_issued) - num(c.credit_used));
 export type AccountRow = {
   method: string; opening: number; collection: number; refunds: number; expenses: number; supplier_payments: number;
@@ -139,10 +163,17 @@ export function renderCloseV2Pdf(s: CloseV2, cashier: string): Blob {
   y += 3;
 
   header("PART B - COLLECTION SUMMARY");
+  row3("Sales collection (this shift's bills)", three((k) => B(k).collection.bill_collection), true);
   for (const m of METHODS) {
-    const v = three((k) => num(B(k).collection.methods.find((x) => x.method === m)?.collection));
+    const v = three((k) => num(B(k).collection.methods.find((x) => x.method === m)?.bill_collection));
     if (v.every((x) => x === 0)) continue;
-    row3(`${METHOD_LABEL[m]} Collection`, v);
+    row3(`   ${METHOD_LABEL[m]}`, v);
+  }
+  row3("Previous due collection", three((k) => B(k).collection.prev_due_collection), true);
+  for (const m of METHODS) {
+    const v = three((k) => num(B(k).collection.methods.find((x) => x.method === m)?.prev_due_collection));
+    if (v.every((x) => x === 0)) continue;
+    row3(`   ${METHOD_LABEL[m]}`, v);
   }
   row3("Total Collection", three((k) => B(k).collection.total_collection), true);
   row3("Refund paid (older bills)", three((k) => B(k).collection.refund_paid));
@@ -183,7 +214,16 @@ export function renderCloseV2Pdf(s: CloseV2, cashier: string): Blob {
     doc.setFont("helvetica", "normal"); y += 6;
   }
   ensure(16); doc.setFontSize(8.5);
+  const cb = cashBreakdown(s);
   const extra: [string, number][] = [
+    ["Cash: opening", cb.opening],
+    ["Cash: + sales cash (this shift's bills)", cb.sales],
+    ["Cash: + previous due cash", cb.prevDue],
+    ...(cb.refundOld ? [["Cash: - refund (older bills)", -cb.refundOld] as [string, number]] : []),
+    ...(cb.expenses || cb.supplier || cb.manualOut ? [["Cash: - expenses / supplier / cash out", -(cb.expenses + cb.supplier + cb.manualOut)] as [string, number]] : []),
+    ...(cb.manualIn ? [["Cash: + cash in", cb.manualIn] as [string, number]] : []),
+    ...(cb.other ? [["Cash: other adjustments", cb.other] as [string, number]] : []),
+    ["Cash: should be in drawer", cb.expected],
     ["Cash expenses", s.expenses.cash],
     ["All expenses (combined)", s.expenses.total],
     ["Supplier payments", s.expenses.supplier_payments],
@@ -244,8 +284,13 @@ export function printCloseV2(s: CloseV2, targetWindow?: Window | null) {
   const row = (k: string, v: string, cls = "") => `<div class="r ${cls}"><span>${esc(k)}</span><b>${v}</b></div>`;
   const bizBlock = (k: BizKey, label: string) => {
     const b = s.business[k];
-    const methods = b.collection.methods.filter((m) => num(m.collection) !== 0)
-      .map((m) => row(`  ${METHOD_LABEL[m.method] ?? m.method}`, tkPrint(m.collection))).join("");
+    const sp = collectionSplit(b.collection);
+    const methods = [
+      row("Sales collection", tkPrint(sp.salesTotal)),
+      ...sp.sales.map((m) => row(`  ${METHOD_LABEL[m.method] ?? m.method}`, tkPrint(m.amount))),
+      row("Prev. due collection", tkPrint(sp.prevTotal)),
+      ...sp.prev.map((m) => row(`  ${METHOD_LABEL[m.method] ?? m.method}`, tkPrint(m.amount))),
+    ].join("");
     return `
     <div class="sec"><div class="t">${esc(label)}</div>
       <div class="st">A · Sales</div>
@@ -290,7 +335,19 @@ export function printCloseV2(s: CloseV2, targetWindow?: Window | null) {
   ${bizBlock("ss", "SASTHYA SEBA")}
   <div class="dash"></div>
   <div class="sec"><div class="t">C · ACCOUNT CLOSING</div>
-    ${row("Opening (cash)", tkPrint(s.accounts.find((a) => a.method === "cash")?.opening ?? 0))}
+    ${(() => {
+      const cb = cashBreakdown(s);
+      return [
+        row("Opening (cash)", tkPrint(cb.opening)),
+        row("+ Sales cash", tkPrint(cb.sales)),
+        row("+ Prev. due cash", tkPrint(cb.prevDue)),
+        cb.refundOld ? row("- Refund (old bills)", tkPrint(-cb.refundOld), "neg") : "",
+        cb.expenses || cb.supplier || cb.manualOut ? row("- Expense / out", tkPrint(-(cb.expenses + cb.supplier + cb.manualOut)), "neg") : "",
+        cb.manualIn ? row("+ Cash in", tkPrint(cb.manualIn)) : "",
+        cb.other ? row("Other adj.", tkPrint(cb.other)) : "",
+        row("= Cash in drawer", tkPrint(cb.expected), "big"),
+      ].join("");
+    })()}
     <table><tr><th>Account</th><th>Expected</th><th>Counted</th><th>Var.</th></tr>${acc}</table>
     ${s.totals ? row("Total variance", tkPrint(s.totals.variance), "big") : ""}
     ${row("Cash expenses", tkPrint(s.expenses.cash))}
